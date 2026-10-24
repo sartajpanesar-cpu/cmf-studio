@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(uv run cmfkit fw pack:*)",
+      "Bash(uv run cmfkit fw replace:*)",
+      "Bash(cmfkit fw pack:*)",
+      "Bash(cmfkit fw replace:*)",
+      "Bash(*ota*upload*)",
+      "Bash(openocd:*)",
+      "Bash(st-flash:*)",
+      "Bash(JLinkExe:*)",
+      "Bash(pyocd:*)"
+    ],
+    "ask": [
+      "Bash(uv run cmfkit pair:*)",
+      "Bash(uv run cmfkit notify:*)",
+      "Bash(uv run cmfkit run:*)",
+      "Bash(uv run cmfkit watchface install:*)",
+      "Bash(uv run cmfkit at:*)",
+      "Bash(cmfkit pair:*)",
+      "Bash(cmfkit notify:*)",
+      "Bash(cmfkit run:*)",
+      "Bash(cmfkit watchface install:*)",
+      "Bash(cmfkit at:*)",
+      "Bash(bash scripts/phase0_live.sh:*)"
+    ]
+  }
+}

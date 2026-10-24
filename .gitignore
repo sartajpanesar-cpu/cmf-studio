@@ -1,0 +1,14 @@
+refs/*
+!refs/PINS.md
+fw/*
+research/logs/
+research/captures/
+*.db
+*.sqlite
+*.pklg
+*.btsnoop
+*.log
+.venv/
+__pycache__/
+node_modules/
+.env
