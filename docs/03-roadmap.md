@@ -6,9 +6,9 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 
 ## Phase 0 — Validate the base (go/no-go) · ~1 evening
 **Question:** does cmfkit actually talk to this Pro 2 from this Mac?
-- [ ] Reference repos cloned into `refs/`, commit hashes pinned in `refs/PINS.md`
-- [ ] Audit summary of cmfkit written to `research/findings.md` (network calls, file writes, which commands write to the device)
-- [ ] `cmfkit --sim` commands pass; `uv run pytest` in refs/CMF-Open passes
+- [x] Reference repos cloned into `refs/`, commit hashes pinned in `refs/PINS.md` (findings 2026-10-24)
+- [x] Audit summary of cmfkit written to `research/findings.md` (network calls, file writes, which commands write to the device) (findings: cmfkit audit)
+- [x] `cmfkit --sim` commands pass; `uv run pytest` in refs/CMF-Open passes (findings 2026-10-24: 28 passed)
 - [ ] Real watch (iPhone BT off): `scan` finds it, `pair` succeeds, `info` returns firmware/serial/battery
 - [ ] `listen` prints button codes; codes recorded in findings
 - [ ] `notify` delivers a test message

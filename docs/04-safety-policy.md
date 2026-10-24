@@ -16,6 +16,10 @@ Add commands only after: found via `cmfkit fw scan`, name clearly a getter, owne
 - `.claude/settings.json` denies firmware/flash commands and asks before device-writing cmfkit commands.
 - watchd's MCP surface excludes AT, firmware, pairing, raw frames.
 - Any new device-writing code path needs a sim test before hardware.
+- cmfkit hazards (audit 2026-10-24, see findings.md): `cmfkit at` sends any AT command unfiltered; any
+  connected command auto-pairs when no key is stored and sets the watch clock on login; `cmfkit run` apps
+  can overwrite the watch's contacts (`Screen.menu`) or send prohibited `AT SETMOTOR=1` (`Screen.buzz`).
+  Don't use `run`/`at` on the real watch; watchd must not call `Screen.menu`/`Screen.buzz`.
 
 ## Recovery plan
 1. Watch misbehaves after a Tier 1 write → delete the face/reset widgets via the CLI, or re-pair with Nothing X and reapply defaults.
