@@ -140,6 +140,7 @@ class WatchLink:
         if state is self.state:
             return
         self.state = state
+        log.info("link %s%s", state.value, f" ({error})" if error else "")
         if state is LinkState.CONNECTED:
             self.connected.set()
             self.connected_since = time.time()

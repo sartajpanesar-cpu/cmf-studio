@@ -69,7 +69,7 @@ async def serve(args: argparse.Namespace) -> None:
         db_path = args.db or APP_DIR / "cmfstudio.db"
 
     store = Store(db_path)
-    link = WatchLink(address, factory, keys)
+    link = WatchLink(address, factory, keys, keepalive_s=args.keepalive)
     link.subscribe(
         lambda e: store.add_event(e["kind"], {k: v for k, v in e.items() if k not in ("kind", "ts")}, e["ts"])
     )
@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--address", help="CoreBluetooth device UUID (default: config.json, else scan)")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--db", type=Path)
+    p.add_argument("--keepalive", type=float, default=60.0, help="seconds between battery keepalive polls")
     p.add_argument("-v", "--verbose", action="count", default=0)
     args = p.parse_args(argv)
     logging.basicConfig(
