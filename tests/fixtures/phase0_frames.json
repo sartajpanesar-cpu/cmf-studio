@@ -1,0 +1,12 @@
+{
+  "_source": "research/logs/phase0-20261025-000145 (run 4) and phase0-20261025-001858 (run 5), CMF Watch Pro 2 fw 1.0.0.57",
+  "notification_ack_raw": "f500000065000100010003",
+  "music_button_payloads": {
+    "0100": "play_pause",
+    "0101": "play_pause",
+    "0201": "next",
+    "0200": "prev",
+    "0300": "vol_up",
+    "0301": "vol_down"
+  }
+}
