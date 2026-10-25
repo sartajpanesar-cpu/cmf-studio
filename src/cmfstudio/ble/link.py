@@ -5,6 +5,9 @@ Rules from Phase 0 (research/findings.md):
   puts the link in NEEDS_PAIR until ``pair()`` is called explicitly.
 - Stay connected after writes: run 4's notify vanished when cmfkit disconnected 300 ms after sending.
 - Hold the link a few seconds after a face install (watch showed "failed" after an instant drop).
+- fw 1.0.0.57 never answers BATTERY requests (probe-1). Battery arrives only in the push burst that
+  follows each TIME, so we re-send TIME periodically; the keepalive is FIRMWARE_VERSION_GET, which
+  is answered every time.
 """
 
 from __future__ import annotations
@@ -94,6 +97,7 @@ class WatchLink:
         settle_s: float = 3.0,
         backoff_s: tuple[float, ...] = (1, 2, 5, 10, 30, 60),
         needs_pair_retry_s: float = 300.0,
+        time_sync_s: float = 900.0,
     ) -> None:
         self.address = address
         self._factory = transport_factory
@@ -102,6 +106,8 @@ class WatchLink:
         self.settle_s = settle_s
         self.backoff_s = backoff_s
         self.needs_pair_retry_s = needs_pair_retry_s
+        self.time_sync_s = time_sync_s
+        self._last_time_sync = 0.0
 
         self.state = LinkState.DISCONNECTED
         self.connected = asyncio.Event()
@@ -219,12 +225,13 @@ class WatchLink:
             # Run 3: a re-bound watch answers with frames our key can't decrypt, then times out.
             # (The simulator instead fails to decode our frame: FrameError.)
             raise StaleKeyError(f"watch rejected the stored key ({exc}); re-pair with `cmf pair`") from exc
+        self._last_time_sync = time.monotonic()  # login() ends with TIME
         self._set_state(LinkState.CONNECTED, error=None)
         async with self._lock:
             await self._refresh_info(session)
 
     async def _hold(self) -> None:
-        """Return (by raising) when the link is lost; poll battery as a keepalive meanwhile."""
+        """Return (by raising) when the link is lost; keepalive + periodic TIME meanwhile."""
         while not self._stopping:
             await _wait_any((self._lost, self._poke), self.keepalive_s)
             self._poke.clear()
@@ -234,7 +241,9 @@ class WatchLink:
                 raise ConnectionError("watch disconnected")
             async with self._lock:
                 assert self._session is not None
-                self.battery, _ = await self._session.battery()
+                if time.monotonic() - self._last_time_sync >= self.time_sync_s:
+                    await self._sync_time(self._session)
+                await self._session.firmware_version()  # answered every time, unlike BATTERY
 
     async def _teardown(self) -> None:
         self.connected.clear()
@@ -243,8 +252,12 @@ class WatchLink:
             with contextlib.suppress(Exception):
                 await transport.disconnect()
 
+    async def _sync_time(self, session: Session) -> None:
+        """Set the watch clock; the watch answers with a push burst that includes BATTERY."""
+        await session.send(ops.TIME, pl.time_sync())
+        self._last_time_sync = time.monotonic()
+
     async def _refresh_info(self, session: Session) -> None:
-        self.battery, _ = await session.battery()
         self.firmware = await session.firmware_version()
         self.serial = await session.serial_number()
 
@@ -275,7 +288,9 @@ class WatchLink:
 
     async def info(self) -> dict[str, Any]:
         async with self._op() as s:
+            await self._sync_time(s)  # triggers a fresh BATTERY push
             await self._refresh_info(s)
+            await asyncio.sleep(0.3)
         return self.status()
 
     async def notify(self, title: str, body: str = "", icon: int = pl.ICONS["generic"]) -> bool:

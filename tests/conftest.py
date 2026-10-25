@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from cmfkit.protocol import opcodes as ops
 from cmfkit.transport.sim import SimWatch
 
 from cmfstudio.ble.keys import MemoryKeyStore
@@ -47,6 +48,15 @@ class FlakySim(SimWatch):
         if not self.up:
             raise ConnectionError("not connected")
         await super().write(channel, data)
+
+    def _dispatch(self, msg) -> None:
+        # Mirror the real Pro 2 (fw 1.0.0.57, research/logs/probe-1.log): BATTERY requests are never
+        # answered; each TIME is followed by an unsolicited BATTERY push.
+        if msg.op == ops.BATTERY:
+            return
+        super()._dispatch(msg)
+        if msg.op == ops.TIME:
+            self._reply(ops.BATTERY, bytes([self.battery, 0]))
 
     def drop(self) -> None:
         self.up = False

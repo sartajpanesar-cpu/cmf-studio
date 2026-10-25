@@ -116,3 +116,18 @@ def test_studio_session_replaces_decoder():
 
     s = StudioSession(SimWatch())
     assert isinstance(s._decoder, SafeFrameDecoder) and isinstance(s, Session)
+
+
+async def test_link_survives_many_keepalives(paired_link, watch):
+    # regression: the real watch never answers BATTERY, so a BATTERY keepalive dropped every session
+    connects = watch.connects
+    await asyncio.sleep(0.5)  # ~10 keepalive periods at 0.05 s
+    assert paired_link.state is LinkState.CONNECTED and watch.connects == connects
+
+
+async def test_battery_comes_from_time_push(paired_link, watch):
+    assert paired_link.battery == 87  # from the push after login's TIME
+    watch.battery = 42
+    paired_link.time_sync_s = 0.01
+    await asyncio.sleep(0.15)
+    assert paired_link.battery == 42
