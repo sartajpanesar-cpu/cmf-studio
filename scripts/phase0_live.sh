@@ -119,7 +119,8 @@ N=$((N + 1))
 ask scan || { echo "scan is required to find the device UUID"; exit 1; }
 "$CMF" -vv scan --timeout 10 2>&1 | redact | tee "$LOG/01-scan.log"
 record scan "${PIPESTATUS[0]}"
-CANDIDATES=$(grep -E '^[0-9A-Fa-f-]{36}  CMF Watch' "$LOG/01-scan.log" || true)
+# log lines carry a timestamp prefix, so match the "UUID  name" pair anywhere on the line
+CANDIDATES=$(grep -oE '[0-9A-Fa-f-]{36}  CMF Watch.*' "$LOG/01-scan.log" | sort -u || true)
 [ -n "$CANDIDATES" ] || { echo "No CMF watch found. Is Nothing X still connected?"; finish; exit 1; }
 echo "$CANDIDATES" | nl
 COUNT=$(echo "$CANDIDATES" | wc -l | tr -d ' ')
