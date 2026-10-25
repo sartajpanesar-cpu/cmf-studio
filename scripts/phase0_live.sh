@@ -13,7 +13,7 @@ CMF="refs/CMF-Open/.venv/bin/cmfkit"
 FACE_PNG="scripts/assets/test_face.png"
 KC_SERVICE="cmf-studio"
 LOG="research/logs/phase0-$(date +%Y%m%d-%H%M%S)"
-LISTEN_SECS=30
+LISTEN_SECS=45
 SIM=0
 # --sim: run the same steps against cmfkit's simulated watch (tests this script; no Bluetooth)
 [ "${1:-}" = --sim ] && { SIM=1; LOG="$LOG-sim"; }
@@ -27,12 +27,27 @@ chmod 700 "$XDG_CONFIG_HOME"
 KEYFILE="$XDG_CONFIG_HOME/cmfkit/devices.json"
 trap 'rm -rf "$XDG_CONFIG_HOME"' EXIT
 
-# Strip the AT GETSECRET reply (text or hex form) and printed auth keys from everything we log.
+# Strip the AT GETSECRET reply (text or hex form) and printed auth keys from everything we log,
+# drop CoreBluetooth advertisement chatter from other devices, and timestamp each line.
 redact() {
-  sed -l -E \
-    -e 's/(GETSECRET:)[0-9A-Fa-f]{32}/\1<redacted>/g' \
-    -e 's/(4745545345435245543a)[0-9a-fA-F]{64}/\1<redacted>/g' \
-    -e 's/([Aa]uth key:? )[0-9a-fA-F]{32}/\1<redacted>/g'
+  perl -MPOSIX=strftime -MTime::HiRes=time -ne '
+    BEGIN { $| = 1 }
+    next if /didDiscoverPeripheral_advertisementData/;
+    next if /Discovered device/ && !/CMF Watch/;
+    s/(GETSECRET:)[0-9A-Fa-f]{32}/$1<redacted>/g;
+    s/(4745545345435245543a)[0-9a-fA-F]{64}/$1<redacted>/g;
+    s/([Aa]uth key:? )[0-9a-fA-F]{32}/$1<redacted>/g;
+    my $t = time; printf "%s.%03d %s", strftime("%H:%M:%S", localtime $t), ($t - int $t) * 1000, $_;'
+}
+
+wait_for_watch() {  # block until the watch advertises again (it vanished after run 1's listen)
+  [ "$SIM" = 1 ] && return 0
+  local i
+  for i in 1 2 3 4 5 6 7 8 9; do
+    "$CMF" scan --timeout 10 2>/dev/null | grep -q "^$ADDR" && return 0
+    echo "  watch not advertising yet ($((i * 10))s); wake it / keep it near the Mac..."
+  done
+  echo "  watch still not visible after 90s; trying anyway"
 }
 
 kc() {  # kc get|put <address>  (reads/writes $KEYFILE; key never passes through argv)
@@ -50,7 +65,7 @@ else:
     os.makedirs(os.path.dirname(keyfile), mode=0o700, exist_ok=True)
     with open(os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
         json.dump({addr: key}, f)
-    print("loaded existing auth key from Keychain")
+    print("loaded existing auth key from Keychain: press s to skip the pair step")
 EOF
 }
 
@@ -69,6 +84,7 @@ step() {  # step <name> <cmd...>
   local name=$1; shift
   N=$((N + 1))
   ask "$name" || return 0
+  [ "$name" = face-build ] || wait_for_watch
   "$@" 2>&1 | redact | tee "$LOG/$(printf %02d $N)-$name.log"
   record "$name" "${PIPESTATUS[0]}"
 }
@@ -124,21 +140,9 @@ step pair "${C[@]}" pair
 # 3. info
 step info "${C[@]}" info
 
-# 4. listen (press each watch button / media control while it runs)
-N=$((N + 1))
-if ask listen; then
-  echo "Listening ${LISTEN_SECS}s: open the music screen and press play/pause, next, prev, volume, find-phone."
-  set -m
-  "${C[@]}" listen > >(redact | tee "$LOG/$(printf %02d $N)-listen.log") 2>&1 &
-  pid=$!
-  sleep "$LISTEN_SECS"
-  kill -INT "$pid" 2>/dev/null; sleep 3; kill -TERM "$pid" 2>/dev/null
-  wait "$pid"; rc=$?
-  set +m
-  # 130 = interrupted by us, which is the expected way to end listen
-  [ "$rc" -eq 130 ] && rc=0
-  record listen "$rc"
-fi
+# 4. listen: pushes a now-playing track first so the music controls send events, then logs frames
+if [ "$SIM" = 1 ]; then LISTEN_ARGS=(--sim); else LISTEN_ARGS=(--address "$ADDR"); fi
+step listen refs/CMF-Open/.venv/bin/python scripts/phase0_listen.py "${LISTEN_ARGS[@]}" --seconds "$LISTEN_SECS"
 
 # 5. notify
 step notify "${C[@]}" notify "CMF Studio" "hello"
