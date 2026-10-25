@@ -5,13 +5,14 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 ---
 
 ## Phase 0 — Validate the base (go/no-go) · ~1 evening
+**Status: DONE 2026-10-25 — GO.** cmfkit talks to this Pro 2 (fw 1.0.0.57) from the MacBook Air.
 **Question:** does cmfkit actually talk to this Pro 2 from this Mac?
 - [x] Reference repos cloned into `refs/`, commit hashes pinned in `refs/PINS.md` (findings 2026-10-24)
 - [x] Audit summary of cmfkit written to `research/findings.md` (network calls, file writes, which commands write to the device) (findings: cmfkit audit)
 - [x] `cmfkit --sim` commands pass; `uv run pytest` in refs/CMF-Open passes (findings 2026-10-24: 28 passed)
 - [x] Real watch (iPhone BT off): `scan` finds it, `pair` succeeds, `info` returns firmware/serial/battery (findings: live run 1 — fw 1.0.0.57)
 - [x] `listen` prints button codes; codes recorded in findings (run 4; volume direction to confirm)
-- [ ] `notify` delivers a test message
+- [x] `notify` delivers a test message (run 5; link must stay up after sending)
 - [x] **One** image face installs and displays; watch still re-pairs with Nothing X afterward (fallback confirmed) (run 4; watch showed a spurious 'failed' message — see findings)
 
 **No-go handling:** if pairing/info fails, capture `-vv` logs, compare frames against the joshuapassos spec, fix in a fork. If unfixable, fall back to porting Gadgetbridge's protocol layer directly.
