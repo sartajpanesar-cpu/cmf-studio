@@ -10,9 +10,9 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 - [x] Audit summary of cmfkit written to `research/findings.md` (network calls, file writes, which commands write to the device) (findings: cmfkit audit)
 - [x] `cmfkit --sim` commands pass; `uv run pytest` in refs/CMF-Open passes (findings 2026-10-24: 28 passed)
 - [x] Real watch (iPhone BT off): `scan` finds it, `pair` succeeds, `info` returns firmware/serial/battery (findings: live run 1 — fw 1.0.0.57)
-- [ ] `listen` prints button codes; codes recorded in findings
+- [x] `listen` prints button codes; codes recorded in findings (run 4; volume direction to confirm)
 - [ ] `notify` delivers a test message
-- [ ] **One** image face installs and displays; watch still re-pairs with Nothing X afterward (fallback confirmed)
+- [x] **One** image face installs and displays; watch still re-pairs with Nothing X afterward (fallback confirmed) (run 4; watch showed a spurious 'failed' message — see findings)
 
 **No-go handling:** if pairing/info fails, capture `-vv` logs, compare frames against the joshuapassos spec, fix in a fork. If unfixable, fall back to porting Gadgetbridge's protocol layer directly.
 

@@ -6,8 +6,11 @@ Format: `YYYY-MM-DD | claim | evidence | status (verified-on-device / sim-only /
 - Advertises as `CMF Watch Pro 2-XXXX`; CoreBluetooth UUID on the MacBook Air: `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`
 - Firmware version: **1.0.0.57** (older than the spec's 1.0.0.73; Gadgetbridge tested .46/.51)
 - Serial: CI04102430001430
-- Button codes: _not captured yet — first listen run saw no MUSIC_BUTTON frames_
-- Dial list at first connect: **7 of 7 slots used** (full)
+- Button codes (MUSIC_BUTTON FFFF:A05D, **2-byte payload** `group ‖ arg`, only after a MUSIC_INFO_SET):
+  `01 00` / `01 01` play/pause (state toggle) · `02 01` / `02 00` next / prev (pressed in that order) ·
+  `03 00` / `03 01` volume (one is up, one is down — direction to confirm). cmfkit's `DEFAULT_BUTTON_MAP`
+  (1-byte codes 01–06, `apps/base.py:19`) is **wrong for this watch**; key on (group, arg).
+- Dial list at first connect: 7 of 7 slots used; after the owner deleted faces: 5 of 7
 
 ## cmfkit audit (refs/CMF-Open @ 37781b1, 2026-10-24)
 Scope: `src/cmfkit/**` (≈3.5k lines Python), `tests/`, `pyproject.toml`, `uv.lock`. The `web/` app store
@@ -85,4 +88,12 @@ approval per policy): `GETVERSION`, `GETSN`, `GETNAME`, `GETPID`, `GETGSENSOR`, 
 - 2026-10-24 | Live run 2 (phase0-20261024-235018): script exited after scan — our parsing bug (timestamped log lines broke the `^UUID` match), not the watch | 01-scan.log | n/a (script)
 - 2026-10-24 | Live run 3 (phase0-20261024-235332): watch advertises and connects every step (~0.5–2 s), but login with the run-1 auth key fails: the reply to AUTH_PHONE_NAME doesn't AES-decrypt with our key ("AES decryption failed"), then the watch drops the link ~8 s later. Between run 1 and run 3 the owner reconnected Nothing X on the iPhone to delete faces | 03-info.log:12-16, same in 04/05/07 | verified-on-device
 - 2026-10-24 | Hypothesis: the watch holds one bond; a Nothing X reconnect/re-bind invalidates the Mac's auth key (secret or bond rotated), so switching phone↔Mac needs a re-pair each time. Matters for the "phone as fallback" design | run 1 vs run 3 | unverified — test by re-pairing now, then checking whether Nothing X can still connect without re-pairing
+- 2026-10-25 | Live run 4 (phase0-20261025-000145): all steps OK — pair, info, listen, notify, face build+install | summary.txt | verified-on-device
+- 2026-10-25 | Re-pair works: AUTH_PAIR_REQUEST → REPLY in 70 ms, watch prompt accepted ~7 s later, login + TIME; new key in Keychain; every later step logged in with it | 02-pair.log | verified-on-device
+- 2026-10-25 | One-bond hypothesis strengthened: after this Mac pairing the owner's Nothing X "reconnects and re-pairs fine" (owner report). Phone↔Mac switching = re-pair on each side | owner report | verified-on-device (owner report)
+- 2026-10-25 | MUSIC_BUTTON frames only arrive after the host sends MUSIC_INFO_SET (run 1 without it: none). Payload is 2 bytes; volume presses repeat ~4–8/s while held | 04-listen.log:00:02:56–00:03:31 | verified-on-device
+- 2026-10-25 | Volume only moves ±1 level from the pushed value (we sent volume 8/16): the watch shows the step locally and expects the host to apply it and echo the new level via MUSIC_INFO_SET. Host behaviour, not a watch bug | owner report + MUSIC_INFO_SET `02 08 10 …` | verified-on-device (interpretation unverified)
+- 2026-10-25 | DIAL_COMMAND_RET `01 04 05 07` + ids 0x113, 0x160, 0x114, 0x118, `ffffffff` = 5 dials with 4 store ids → **`ffffffff` is a counted slot (the custom photo dial), not a terminator**; active index 4 = that custom dial | 03-info.log | verified-on-device
+- 2026-10-25 | Photo face install: INIT1 `01`, INIT2 `01`, watch pulls 7 chunks of 0xC00 (3072) B (last 0x7D6), FINISH `01` → "installed and activated" on the host, and the face displays. **But the watch showed an install-failed message.** cmfkit disconnects ~1 ms after WF_FINISH_ACK; hypothesis: the watch still expects something (or time) after FINISH and reports failure when the link drops. Test: keep the link up a few seconds after FINISH | 07-face-install.log; owner report | verified-on-device (cause unverified)
+- 2026-10-25 | One unsolicited frame per session sometimes fails AES decryption with the session key (info and notify, right after the post-login pushes). cmfkit drops it without logging raw bytes → Phase 1 `ble` must log raw hex of undecryptable frames | 03-info.log, 05-notify.log | verified-on-device (content unknown)
 - 2026-10-24 | Homebrew `uv` builds from source on macOS 14 (python@3.15 build fails); installed uv from PyPI wheel into `~/.local/share/uv-venv`, symlinked to `~/.local/bin/uv` | brew output | n/a (env)
