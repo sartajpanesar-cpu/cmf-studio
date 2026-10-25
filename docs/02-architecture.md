@@ -31,7 +31,7 @@ The watch accepts **one BLE connection**. So exactly one long-running process â€
 | `cli` | Thin client over api (`cmf status`, `cmf sync`, `cmf face push`, `cmf notify`) | api |
 | `ui` (Phase 4) | Studio + Health dashboard | api |
 
-## Data model (initial)
+## Data model (as implemented in `store/db.py`, migration 1)
 ```sql
 raw_frames(id, received_at, opcode, payload_hex, parser_version)
 samples(metric TEXT, ts INTEGER, value REAL, source_frame_id, PRIMARY KEY(metric, ts))
@@ -39,7 +39,7 @@ sleep_sessions(start_ts, end_ts, stages_json, source_frame_id)
 workouts(start_ts, end_ts, type, summary_json, source_frame_id)
 daily(date, metric, value, PRIMARY KEY(date, metric))      -- derived, rebuildable
 faces(id, name, spec_json, last_rendered_png, last_installed_at)
-jobs(id, kind, args_json, state, attempts, created_at, finished_at, error)
+jobs(id, kind, args_json, state, attempts, created_at, finished_at, error, result_json, not_after)  -- not_after: drop stale jobs (e.g. a notification) instead of running them days later
 events(id, ts, kind, data_json)                             -- buttons, connects, alerts
 ```
 `daily` is always rebuildable from `samples`; `samples` from `raw_frames`.
