@@ -8,7 +8,7 @@ Format: `YYYY-MM-DD | claim | evidence | status (verified-on-device / sim-only /
 - Serial: CI04102430001430
 - Button codes (MUSIC_BUTTON FFFF:A05D, **2-byte payload** `group ‖ arg`, only after a MUSIC_INFO_SET):
   `01 00` / `01 01` play/pause (state toggle) · `02 01` / `02 00` next / prev (pressed in that order) ·
-  `03 00` / `03 01` volume (one is up, one is down — direction to confirm). cmfkit's `DEFAULT_BUTTON_MAP`
+  `03 00` / `03 01` volume up / down (owner pressed up first "I think" — tentative). cmfkit's `DEFAULT_BUTTON_MAP`
   (1-byte codes 01–06, `apps/base.py:19`) is **wrong for this watch**; key on (group, arg).
 - Dial list at first connect: 7 of 7 slots used; after the owner deleted faces: 5 of 7
 
@@ -96,4 +96,6 @@ approval per policy): `GETVERSION`, `GETSN`, `GETNAME`, `GETPID`, `GETGSENSOR`, 
 - 2026-10-25 | DIAL_COMMAND_RET `01 04 05 07` + ids 0x113, 0x160, 0x114, 0x118, `ffffffff` = 5 dials with 4 store ids → **`ffffffff` is a counted slot (the custom photo dial), not a terminator**; active index 4 = that custom dial | 03-info.log | verified-on-device
 - 2026-10-25 | Photo face install: INIT1 `01`, INIT2 `01`, watch pulls 7 chunks of 0xC00 (3072) B (last 0x7D6), FINISH `01` → "installed and activated" on the host, and the face displays. **But the watch showed an install-failed message.** cmfkit disconnects ~1 ms after WF_FINISH_ACK; hypothesis: the watch still expects something (or time) after FINISH and reports failure when the link drops. Test: keep the link up a few seconds after FINISH | 07-face-install.log; owner report | verified-on-device (cause unverified)
 - 2026-10-25 | One unsolicited frame per session sometimes fails AES decryption with the session key (info and notify, right after the post-login pushes). cmfkit drops it without logging raw bytes → Phase 1 `ble` must log raw hex of undecryptable frames | 03-info.log, 05-notify.log | verified-on-device (content unknown)
+- 2026-10-25 | **Only one custom photo-dial slot.** Installing the test face (9063) replaced the owner's existing custom face instead of adding a slot (owner report). Contradicts spec §11.2 "photo = APPEND, list grows" on this fw (1.0.0.57); consistent with the single `ffffffff` id. Any photo install overwrites the current custom face → back up the source image first | owner report; DIAL_COMMAND_RET | verified-on-device (owner report)
+- 2026-10-25 | Notify not seen by owner in run 4. Payload matched spec §9 exactly (`ff 00 ‖ when ‖ 0a ‖ "CMF Studio" ‖ "hello"`), but no APP_NOTIFICATION_ACK (0065:0003) arrived; one undecryptable frame came ~100 ms later and cmfkit disconnected after 300 ms. Retest via scripts/phase0_notify.py (holds link, logs raw frames) | 05-notify.log | verified-on-device (cause unknown)
 - 2026-10-24 | Homebrew `uv` builds from source on macOS 14 (python@3.15 build fails); installed uv from PyPI wheel into `~/.local/share/uv-venv`, symlinked to `~/.local/bin/uv` | brew output | n/a (env)

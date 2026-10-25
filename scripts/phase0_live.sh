@@ -148,8 +148,9 @@ step info "${C[@]}" info
 if [ "$SIM" = 1 ]; then LISTEN_ARGS=(--sim); else LISTEN_ARGS=(--address "$ADDR"); fi
 step listen refs/CMF-Open/.venv/bin/python scripts/phase0_listen.py "${LISTEN_ARGS[@]}" --seconds "$LISTEN_SECS"
 
-# 5. notify
-step notify "${C[@]}" notify "CMF Studio" "hello"
+# 5. notify: two test notifications, link held open 8 s after each, raw frames logged
+echo "Notify: watch the screen; two notifications should pop up ~8 s apart."
+step notify refs/CMF-Open/.venv/bin/python scripts/phase0_notify.py "${LISTEN_ARGS[@]}"
 
 # 6. one photo face: build offline (with decoded preview), then install the exact .bin
 step face-build "$CMF" watchface build "$FACE_PNG" -o "$LOG/test_face.bin" --preview "$LOG/test_face_preview.png"
