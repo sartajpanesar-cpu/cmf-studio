@@ -36,6 +36,15 @@ MODEL = "CMF Watch 3 Pro"
 Event = dict[str, Any]
 
 
+async def _wait_any(events: tuple[asyncio.Event, ...], timeout: float) -> None:
+    waiters = [asyncio.ensure_future(e.wait()) for e in events]
+    try:
+        await asyncio.wait(waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+
+
 class LinkState(enum.StrEnum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
@@ -107,6 +116,8 @@ class WatchLink:
         self._lock = asyncio.Lock()
         self._lost = asyncio.Event()
         self._wake = asyncio.Event()
+        self._poke = asyncio.Event()
+        self._attempt = 0
         self._stopping = False
         self._listeners: list[Callable[[Event], None]] = []
 
@@ -152,12 +163,11 @@ class WatchLink:
 
     async def run(self) -> None:
         """Keep the link up until ``stop()``. Run as a long-lived task."""
-        attempt = 0
         while not self._stopping:
             delay = 0.0
             try:
                 await self._connect()
-                attempt = 0
+                self._attempt = 0
                 await self._hold()
             except (NotPairedError, StaleKeyError) as exc:
                 self._set_state(LinkState.NEEDS_PAIR, str(exc))
@@ -167,8 +177,8 @@ class WatchLink:
                     break
                 log.warning("link down: %r", exc)
                 self._set_state(LinkState.DISCONNECTED, repr(exc))
-                delay = self.backoff_s[min(attempt, len(self.backoff_s) - 1)]
-                attempt += 1
+                delay = self.backoff_s[min(self._attempt, len(self.backoff_s) - 1)]
+                self._attempt += 1
             finally:
                 await self._teardown()
             if not self._stopping and delay:
@@ -176,6 +186,12 @@ class WatchLink:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._wake.wait(), delay)
         self._set_state(LinkState.STOPPED)
+
+    def nudge(self) -> None:
+        """Reconnect now / check the link now, e.g. after the Mac wakes (core.power.WakeWatcher)."""
+        self._attempt = 0
+        self._wake.set()
+        self._poke.set()
 
     async def stop(self) -> None:
         self._stopping = True
@@ -209,8 +225,8 @@ class WatchLink:
     async def _hold(self) -> None:
         """Return (by raising) when the link is lost; poll battery as a keepalive meanwhile."""
         while not self._stopping:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._lost.wait(), self.keepalive_s)
+            await _wait_any((self._lost, self._poke), self.keepalive_s)
+            self._poke.clear()
             if self._stopping:
                 return
             if self._lost.is_set():

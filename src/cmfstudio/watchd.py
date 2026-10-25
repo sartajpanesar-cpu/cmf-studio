@@ -20,6 +20,7 @@ from .api.auth import ensure_token
 from .ble.keys import KeychainKeyStore, MemoryKeyStore
 from .ble.link import WatchLink
 from .core.jobs import JobQueue
+from .core.power import WakeWatcher
 from .store.db import Store
 
 APP_DIR = Path.home() / "Library" / "Application Support" / "cmf-studio"
@@ -76,12 +77,18 @@ async def serve(args: argparse.Namespace) -> None:
     app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces")
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
+    def on_wake(slept_s: float) -> None:
+        store.add_event("wake", {"slept_s": round(slept_s)})
+        link.nudge()
+
     queue.start()
     link_task = asyncio.create_task(link.run(), name="link")
+    wake_task = asyncio.create_task(WakeWatcher(on_wake).run(), name="wake")
     log.info("watchd up: %s, api http://127.0.0.1:%d, db %s", address, args.port, db_path)
     try:
         await server.serve()  # returns on SIGINT/SIGTERM
     finally:
+        wake_task.cancel()
         await link.stop()
         await queue.stop()
         await asyncio.wait_for(link_task, 10)
