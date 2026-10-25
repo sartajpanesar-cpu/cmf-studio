@@ -18,14 +18,14 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 **No-go handling:** if pairing/info fails, capture `-vv` logs, compare frames against the joshuapassos spec, fix in a fork. If unfixable, fall back to porting Gadgetbridge's protocol layer directly.
 
 ## Phase 1 — watchd skeleton · ~1 weekend
-- [ ] `src/cmfstudio` package, uv project, ruff + pytest + CI (GitHub Actions, sim-only tests)
-- [ ] `ble` wrapper over cmfkit with reconnect + keepalive
-- [ ] `core` job queue with offline backlog
-- [ ] `store` schema + migrations
-- [ ] FastAPI on 127.0.0.1 with Keychain token; `/status`, `/notify`, `/faces/install`
-- [ ] `cmf` CLI over the API
-- [ ] launchd plist; survives Mac sleep/wake and reconnects automatically
-- [ ] All device-writing endpoints covered by sim tests
+- [x] `src/cmfstudio` package, uv project, ruff + pytest + CI (GitHub Actions, sim-only tests) (workflow written; no GitHub remote yet, so only run locally)
+- [x] `ble` wrapper over cmfkit with reconnect + keepalive (sim-tested; real-watch check pending)
+- [x] `core` job queue with offline backlog
+- [x] `store` schema + migrations
+- [x] FastAPI on 127.0.0.1 with Keychain token; `/status`, `/notify`, `/faces/install` (+ `/pair`, `/jobs`, `/events`)
+- [x] `cmf` CLI over the API
+- [ ] launchd plist; survives Mac sleep/wake and reconnects automatically (scripts/launchd.sh + wake detection written; needs owner test on the real watch)
+- [x] All device-writing endpoints covered by sim tests (tests/test_api.py, test_jobs.py, test_ble.py)
 
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
 - [ ] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs

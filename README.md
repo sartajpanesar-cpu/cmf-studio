@@ -3,7 +3,17 @@
 Mac-side companion, design studio, and health-analytics stack for the **CMF Watch Pro 2** (model D398, Actions ATS3089C, Zephyr RTOS + LVGL).
 Goal: the MacBook replaces the phone app — sync health data, design faces/fonts/graphics, push widgets and alerts, and drive the watch from Claude via MCP.
 
-> Status: planning complete, no code yet. Start at **Phase 0** in `docs/03-roadmap.md`.
+> Status: Phase 0 done (GO, 2026-10-25). Phase 1 (watchd) built and sim-tested; awaiting the real-watch check. See `docs/03-roadmap.md`.
+
+## Quick start (after setup below)
+```bash
+uv sync
+uv run watchd            # owns Bluetooth; or `uv run watchd --sim` for the simulated watch
+uv run cmf status        # in another terminal
+uv run cmf pair          # first run, or after Nothing X has used the watch (accept on the watch)
+uv run cmf notify "Hello" "from the Mac"
+bash scripts/launchd.sh install   # run watchd at login, restart on exit
+```
 
 ## Folder map
 
