@@ -128,7 +128,8 @@ PICK=1
 [ "$COUNT" -gt 1 ] && read -r -p "Which one? [1-$COUNT] " PICK
 ADDR=$(echo "$CANDIDATES" | sed -n "${PICK}p" | awk '{print $1}')
 echo "Using $ADDR" | tee -a "$LOG/01-scan.log"
-kc get "$ADDR" 2>/dev/null || echo "no stored auth key; pairing step will create one"
+kc get "$ADDR" 2>/dev/null | tee -a "$LOG/01-scan.log" || echo "no stored auth key; pairing step will create one"
+echo "  (if Nothing X has connected to the watch since the last pair, the stored key is stale: run pair)"
 
 C=("$CMF" -vv --address "$ADDR")
 fi
@@ -136,7 +137,9 @@ fi
 # 2. pair (reads AT GETSECRET, then the watch shows a prompt: ACCEPT IT ON THE WATCH within 60 s)
 echo; echo "Pair: when the watch shows a pairing prompt, accept it on the watch."
 step pair "${C[@]}" pair
-[ -f "$KEYFILE" ] && kc put "$ADDR" | tee -a "$LOG/02-pair.log"
+case "${SUMMARY[*]+"${SUMMARY[*]}"}" in
+  *"pair: ok"*) [ -f "$KEYFILE" ] && kc put "$ADDR" | tee -a "$LOG/02-pair.log" ;;
+esac
 
 # 3. info
 step info "${C[@]}" info
