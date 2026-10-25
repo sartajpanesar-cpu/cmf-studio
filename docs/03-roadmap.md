@@ -18,13 +18,22 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 **No-go handling:** if pairing/info fails, capture `-vv` logs, compare frames against the joshuapassos spec, fix in a fork. If unfixable, fall back to porting Gadgetbridge's protocol layer directly.
 
 ## Phase 1 — watchd skeleton · ~1 weekend
+**Status 2026-10-25 (where we left off):** all code done on branch `phase-1` (not merged), 48 sim tests pass. Verified on the
+real watch: connect/login with the Keychain key, keepalive, reconnect after Mac Bluetooth off/on, notify, launchd agent connects.
+Remaining before Phase 1 is DONE:
+1. **Sleep/wake check** after the Mac has slept (e.g. overnight): `uv run cmf status` → `connected`; `uv run cmf events --kind wake`
+   shows a wake event; `tail ~/Library/Logs/cmf-studio/watchd.log` shows a reconnect within ~1 min of opening the lid.
+2. If it passes: tick the launchd AC, mark Phase 1 DONE, merge `phase-1` into `main`. (CLAUDE.md rule 4: until then, ask before writes.)
+3. Small follow-ups (can roll into Phase 2): nudge the link on Bluetooth power-on; push the repo to GitHub so CI actually runs.
+Notes: the watch keeps one pairing — if Nothing X connects, run `uv run cmf pair`. launchd agent: `bash scripts/launchd.sh status|logs|uninstall`.
+
 - [x] `src/cmfstudio` package, uv project, ruff + pytest + CI (GitHub Actions, sim-only tests) (workflow written; no GitHub remote yet, so only run locally)
-- [x] `ble` wrapper over cmfkit with reconnect + keepalive (sim-tested; real-watch check pending)
+- [x] `ble` wrapper over cmfkit with reconnect + keepalive (verified on device 2026-10-25: keepalive holds, reconnect after Mac BT off/on)
 - [x] `core` job queue with offline backlog
 - [x] `store` schema + migrations
 - [x] FastAPI on 127.0.0.1 with Keychain token; `/status`, `/notify`, `/faces/install` (+ `/pair`, `/jobs`, `/events`)
 - [x] `cmf` CLI over the API
-- [ ] launchd plist; survives Mac sleep/wake and reconnects automatically (scripts/launchd.sh + wake detection written; needs owner test on the real watch)
+- [ ] launchd plist; survives Mac sleep/wake and reconnects automatically (agent installed and connecting under launchd 2026-10-25; **sleep/wake not yet verified** — overnight sleep is the test)
 - [x] All device-writing endpoints covered by sim tests (tests/test_api.py, test_jobs.py, test_ble.py)
 
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
