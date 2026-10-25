@@ -6,6 +6,8 @@ Host headers so a web page can't reach it via DNS rebinding.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import io
 import json
@@ -108,6 +110,8 @@ def create_app(link: WatchLink, queue: JobQueue, store: Store, token: str, faces
             await link.pair()
         except (LinkError, TimeoutError, OSError) as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"pairing failed: {exc!r}") from exc
+        with contextlib.suppress(TimeoutError):  # the supervisor reconnects with the new key
+            await asyncio.wait_for(link.connected.wait(), 15)
         return {"paired": True, "link": link.status()}
 
     @app.get("/jobs", dependencies=[Depends(auth)])
