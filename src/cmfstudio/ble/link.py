@@ -232,6 +232,8 @@ class WatchLink:
         self.serial = await session.serial_number()
 
     def _on_raw(self, channel: Channel, data: bytes) -> None:
+        if channel is Channel.SHELL:  # carries the AT GETSECRET reply; never log it
+            return
         log.debug("raw %s %s", channel.value, data.hex())
 
     def _on_message(self, msg: Message) -> None:
