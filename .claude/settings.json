@@ -24,5 +24,29 @@
       "Bash(cmfkit at:*)",
       "Bash(bash scripts/phase0_live.sh:*)"
     ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/cmf-hook start 2>/dev/null || true", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/cmf-hook stop 2>/dev/null || true", "timeout": 10, "async": true }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.venv/bin/cmf-hook notify 2>/dev/null || true", "timeout": 10, "async": true }
+        ]
+      }
+    ]
   }
 }

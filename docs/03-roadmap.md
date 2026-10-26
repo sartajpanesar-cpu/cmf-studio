@@ -79,9 +79,12 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 3. Measure on-watch buffer length (Phase 2 deferred).
 
 ## Phase 5 — MCP + automations · ~1 weekend
-- [ ] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code
+- [x] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code (`.mcp.json` → `cmf-mcp`;
+  verified over stdio against the real watchd 2026-10-26)
 - [ ] Rules engine: on-sync → re-render face; job-done → notify; button → action
-- [ ] Claude Code hooks → watch alerts (oh-my-wrist pattern)
+- [x] Claude Code hooks → watch alerts (oh-my-wrist pattern): `cmf-hook` in `.claude/settings.json`. Turns of
+  ≥ 60 s (`CMF_HOOK_MIN_S`) and permission/idle prompts alert the wrist; 5 min TTL, never blocks Claude.
+  Pipe-tested against the real watch 2026-10-26 (job acked)
 - [ ] Threat model + least-privilege write-up (portfolio artifact)
 
 ## Phase 6 — Firmware research (read-only, optional) · open-ended

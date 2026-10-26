@@ -23,6 +23,7 @@ dependencies = [
 cmf = "cmfstudio.cli.main:main"
 watchd = "cmfstudio.watchd:main"
 cmf-mcp = "cmfstudio.mcp.server:main"
+cmf-hook = "cmfstudio.cli.claude_hook:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
