@@ -134,3 +134,13 @@ def test_migration_2_dedupes_face_names(tmp_path):
     assert store.version == 2
     assert [(f["name"]) for f in store.faces()] == ["a", "b"]
     assert store.db.execute("SELECT spec_json FROM faces WHERE name='a'").fetchone()[0] == "2"
+
+
+async def test_install_marks_custom_face_active_without_waiting_for_watch(faces, paired_link):
+    paired_link.dials = STORE_FACE_ACTIVE  # what the watch reported at login, before the install
+    face_id = faces.save(SPEC)
+    await faces.queue.wait((await faces.install(face_id))["job"]["id"], 10)
+    assert paired_link.custom_face_active is True
+    add_steps(faces.store, 2222)
+    res = await faces.refresh_after_sync()  # must not skip as "another face is active"
+    assert res and "job" in res

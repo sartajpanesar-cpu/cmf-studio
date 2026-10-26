@@ -35,13 +35,12 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
 **Status: DONE 2026-10-26** (owner decision to move on with two items deferred). watchd auto-syncs after each connect and
 hourly; daily totals; `cmf sync | samples | today | days | reparse`; real-frame fixtures stay local. One day cross-checked against
-the watch screens by the owner: identical. **Deferred:** SpO2 (no frames yet — enable blood-oxygen monitoring on the watch, then
-confirm frames land); buffer length (leave the Mac closed 1–3 days and look for gaps). Both can be checked any time without code.
+the watch screens by the owner: identical. **Deferred:** buffer length (leave the Mac closed 1–3 days and look for gaps). Both can be checked any time without code.
 
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
 - [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
 - [x] Fixtures: real captured frames in `tests/fixtures/`, parser tests pass (owner decision 2026-10-26: real frames live in gitignored `tests/fixtures/private/`, exported by `scripts/export_fixtures.py`; tests skip without them, so CI uses synthetic frames)
-- [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress ✓ 2026-10-26; **SpO2 deferred**: no frames yet, monitoring likely off)
+- [x] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress ✓ and SpO2 ✓ 2026-10-26)
 - [x] Values cross-checked against the watch's own screens for one day (document discrepancies) (2026-10-26, owner: identical; calories are kcal)
 - [x] Sleep: implement, then document how it differs from the watch (known Gadgetbridge bug) (2026-10-26: no difference for the first night; see findings)
 - [ ] Measure on-watch buffer length (findings) (**deferred** by owner; needs 1–3 days with the Mac closed)

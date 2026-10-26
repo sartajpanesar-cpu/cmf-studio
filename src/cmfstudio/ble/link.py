@@ -379,7 +379,20 @@ class WatchLink:
         async with self._op() as s:
             ok = await s.upload_photo_dial(blob, style, x, y, color565)
             await asyncio.sleep(self.settle_s)
-            return ok
+        if ok:
+            self._mark_custom_active()
+        return ok
+
+    def _mark_custom_active(self) -> None:
+        """A successful photo install activates the custom dial, but the watch only re-reports its dial
+        list with the next TIME push (≤15 min); update our copy now so refresh logic sees the truth."""
+        if not self.dials:
+            return
+        ids = list(self.dials["ids"])
+        if CUSTOM_DIAL_ID not in ids:
+            ids.append(CUSTOM_DIAL_ID)
+        index = ids.index(CUSTOM_DIAL_ID)
+        self.dials = {**self.dials, "ids": ids, "total": len(ids), "active_index": index, "active_id": CUSTOM_DIAL_ID}
 
     async def pair(self) -> None:
         """Explicit first-time pairing (Tier 2). Only allowed while not connected.
