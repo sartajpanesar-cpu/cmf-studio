@@ -1,8 +1,10 @@
 """MCP server: lets Claude (Code / Desktop) use the watch through watchd, with least privilege.
 
 Exposed (docs/02-architecture.md "MCP tool surface"): watch_status, sync_now, query_health, notify, render_face
-(preview only), list_faces, install_face (requires confirm). Never exposed: the AT shell, firmware tools,
-pairing/reset, raw frames. Everything goes through watchd's localhost API; this process never touches Bluetooth.
+(preview only), list_faces, install_face (requires confirm), and settings the owner asked Claude to manage —
+get_watch_settings, set_alarm / remove_alarm (one alarm at a time; the server keeps the rest), set_goals,
+set_do_not_disturb, find_watch. Never exposed: the AT shell, firmware tools, pairing/reset, raw frames or raw
+settings writes. Everything goes through watchd's localhost API; this process never touches Bluetooth.
 
 Health data returned here enters the model's context, so query_health returns daily or hourly aggregates only,
 never raw samples (docs/04-safety-policy.md).
@@ -33,6 +35,8 @@ INSTRUCTIONS = """Tools for the owner's CMF Watch Pro 2, via the local watchd da
   told about, not chatter.
 - Faces: render_face previews a FaceSpec; install_face replaces the watch's only custom face and needs confirm=true -
   only install when the owner has asked for that face.
+- Settings: get_watch_settings first; set_alarm adds or updates the alarm at a time, remove_alarm deletes one;
+  set_goals, set_do_not_disturb, find_watch (rings the wrist). Change settings only when the owner asked.
 There are deliberately no tools for pairing, firmware, factory settings or raw Bluetooth."""
 
 DAILY_METRICS: dict[str, tuple[str, float]] = {  # name -> (daily key, scale)
@@ -203,7 +207,65 @@ def build_server(client_factory: Callable[[], httpx.AsyncClient] = default_clien
         res = await call("POST", f"/faces/{face_id}/install", params={"confirm": True, "force": True})
         return {"state": res["job"]["state"], "name": res["render"]["name"]}
 
+    settings_write = ToolAnnotations(
+        read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    )
+
+    @server.tool(annotations=read_only)
+    async def get_watch_settings() -> dict[str, Any]:
+        """Alarms, daily goals, Do Not Disturb, wrist raise, 12/24h, standing/water reminders and the workout menu,
+        read from the watch."""
+        snap = await call("GET", "/settings")
+        snap.pop("sports_available", None)
+        return snap
+
+    async def _alarms() -> list[dict[str, Any]]:
+        return (await call("GET", "/settings"))["alarms"] or []
+
+    @server.tool(annotations=settings_write)
+    async def set_alarm(
+        time: str, enabled: bool = True, days: list[str] | None = None, label: str = ""
+    ) -> dict[str, Any]:
+        """Add an alarm, or update the one already at ``time`` (HH:MM, 24-hour). days: any of mon tue wed thu fri
+        sat sun; none = one-time. Other alarms are kept."""
+        alarms = [a for a in await _alarms() if a["time"] != _hhmm(time)]
+        alarms.append({"time": time, "enabled": enabled, "days": days or [], "label": label})
+        await call("PUT", "/settings/alarms", json=alarms)
+        return {"alarms": await _alarms()}
+
+    @server.tool(annotations=settings_write)
+    async def remove_alarm(time: str) -> dict[str, Any]:
+        """Delete the alarm at ``time`` (HH:MM). Other alarms are kept."""
+        alarms = await _alarms()
+        kept = [a for a in alarms if a["time"] != _hhmm(time)]
+        if len(kept) == len(alarms):
+            raise WatchdError(f"no alarm at {time}")
+        await call("PUT", "/settings/alarms", json=kept)
+        return {"alarms": await _alarms()}
+
+    @server.tool(annotations=settings_write)
+    async def set_goals(steps: int, distance_m: int, kcal: int) -> dict[str, Any]:
+        """Daily goals. The watch acknowledges these but can't report them back yet, so the result is 'sent'."""
+        r = await call("PUT", "/settings/goals", json={"steps": steps, "distance_m": distance_m, "kcal": kcal})
+        return {"sent": bool(r.get("acked")), "note": "the watch can't confirm goals yet; check them on the watch"}
+
+    @server.tool(annotations=settings_write)
+    async def set_do_not_disturb(on: bool) -> dict[str, Any]:
+        """Turn the watch's Do Not Disturb on or off."""
+        await call("PUT", "/settings/switch/dnd", json={"on": on})
+        return {"do_not_disturb": on}
+
+    @server.tool(annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False))
+    async def find_watch() -> dict[str, Any]:
+        """Make the watch ring and vibrate so the owner can find it."""
+        return await call("POST", "/find-watch")
+
     return server
+
+
+def _hhmm(text: str) -> str:
+    h, _, m = text.partition(":")
+    return f"{int(h):02d}:{m}" if h.isdigit() and m else text
 
 
 def _missing(d0: dt.date, d1: dt.date, values: dict[str, float]) -> list[str]:

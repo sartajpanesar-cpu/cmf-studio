@@ -10,6 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from cmfstudio.api.app import create_app
 from cmfstudio.core.jobs import JobQueue
+from cmfstudio.core.settings import SettingsService
 from cmfstudio.mcp.server import build_server
 from cmfstudio.render.service import FaceService
 from cmfstudio.store.db import Store
@@ -18,7 +19,10 @@ from cmfstudio.sync.manager import SyncManager
 
 from .test_render import needs_browser
 
-ALLOWED = {"watch_status", "sync_now", "query_health", "notify", "render_face", "list_faces", "install_face"}
+ALLOWED = {
+    "watch_status", "sync_now", "query_health", "notify", "render_face", "list_faces", "install_face",
+    "get_watch_settings", "set_alarm", "remove_alarm", "set_goals", "set_do_not_disturb", "find_watch",
+}  # fmt: skip
 
 
 @pytest.fixture
@@ -29,7 +33,8 @@ async def mcp(paired_link, tmp_path):
     queue = JobQueue(store, paired_link, retry_s=0.01, handlers={"sync": lambda lk, _a: sync.fetch(lk)})
     queue.start()
     faces = FaceService(store, paired_link, queue, tmp_path / "faces")
-    app = create_app(paired_link, queue, store, "t", tmp_path, sync, faces)
+    settings = SettingsService(paired_link, store)
+    app = create_app(paired_link, queue, store, "t", tmp_path, sync, faces, settings=settings)
 
     def client():
         return httpx.AsyncClient(
@@ -54,7 +59,7 @@ async def test_tool_surface_is_exactly_the_allowed_set(mcp):
     server, _ = mcp
     names = {t.name for t in await server.list_tools()}
     assert names == ALLOWED
-    forbidden = {"pair", "at", "shell", "firmware", "ota", "reset", "raw", "frame", "flash", "unbind"}
+    forbidden = {"pair", "at", "shell", "firmware", "ota", "reset", "raw", "frame", "flash", "unbind", "probe"}
     assert not any(set(name.split("_")) & forbidden for name in names)
 
 
@@ -127,3 +132,25 @@ async def test_watchd_down_gives_a_clear_error():
 
     with pytest.raises(ToolError, match="watchd isn't running"):
         await build_server(down).call_tool("watch_status", {})
+
+
+async def test_alarm_tools_keep_the_other_alarms(mcp, watch):
+    server, _ = mcp
+    settings = data(await call(server, "get_watch_settings"))
+    assert settings["alarms"] == [{"time": "08:20", "enabled": False, "days": [], "label": ""}]
+    after = data(await call(server, "set_alarm", time="6:30", days=["mon", "fri"], label="Gym"))["alarms"]
+    assert [a["time"] for a in after] == ["06:30", "08:20"]
+    after = data(await call(server, "set_alarm", time="06:30", enabled=False))["alarms"]
+    assert after[0] == {"time": "06:30", "enabled": False, "days": [], "label": ""} and len(after) == 2
+    after = data(await call(server, "remove_alarm", time="06:30"))["alarms"]
+    assert [a["time"] for a in after] == ["08:20"]
+    with pytest.raises(ToolError, match="no alarm at 07:00"):
+        await call(server, "remove_alarm", time="07:00")
+
+
+async def test_dnd_goals_find(mcp, watch):
+    server, _ = mcp
+    assert data(await call(server, "set_do_not_disturb", on=True)) == {"do_not_disturb": True}
+    assert watch.settings[0x0099] == b"\x01"
+    assert data(await call(server, "set_goals", steps=9000, distance_m=7000, kcal=500))["sent"] is True
+    assert data(await call(server, "find_watch")) == {"acked": True}

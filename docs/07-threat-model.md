@@ -96,8 +96,13 @@ Boundaries, from least to most trusted input:
   | `sync_now` | Tier 0 fetch | idempotent |
   | `notify` | Tier 1, transient | title/body truncated; 1 h TTL |
   | `install_face` | Tier 1, replaces the custom slot | refuses unless `confirm=true`; tool text says only on the owner's request; destructive hint so clients ask |
+  | `get_watch_settings` | read | alarms, goals, switches, reminders, workout menu |
+  | `set_alarm`, `remove_alarm` | Tier 1 | one alarm at a time: the server reads the list and keeps the others; every write is verified by read-back |
+  | `set_goals`, `set_do_not_disturb` | Tier 1 | typed values only (no raw bytes); DND verified by read-back, goals acked only |
+  | `find_watch` | Tier 1, transient | rings/vibrates the watch |
 
-  Not exposed at all: pairing, AT, firmware, raw frames, rules, deleting data. Errors are deliberate `ToolError`s, so
+  Not exposed at all: pairing, AT, firmware, raw frames, raw settings writes (`/settings/raw` is a research
+  endpoint for the owner only), rules, deleting data. Errors are deliberate `ToolError`s, so
   internal exceptions don't leak paths or stack traces into the model's context.
 - **Residual:** a fully compromised session could still install a face or buzz the wrist. Both are reversible Tier 1
   effects; the client's approval prompt is the last check.
@@ -154,7 +159,7 @@ Specs come from the CLI, the UI, Claude's design assistant and MCP, and are rend
 | Actor | Can | Cannot |
 |---|---|---|
 | Owner (CLI/UI) | everything in Tiers 0–2 via watchd, with `confirm` for installs and pairing | Tier 3 through watchd (no code path) |
-| Claude via MCP | the 7 tools above; install only with `confirm=true` | pair, AT, firmware, raw frames, rules, delete data, raw health samples |
+| Claude via MCP | the 13 tools above; install only with `confirm=true` | pair, AT, firmware, raw frames, raw settings bytes, rules, delete data, raw health samples |
 | Claude Code itself | run project commands | `cmfkit fw pack/replace`, OTA, SWD (denied); `cmfkit at/run/pair/notify/watchface install` (asks) |
 | Rules engine | notify, sync, refresh face, run a named Shortcut | shell, Tier 2+, writing its own rules |
 | Hooks | one short notification per event | anything else; can't delay Claude |
