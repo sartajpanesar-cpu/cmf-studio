@@ -23,6 +23,7 @@ from .ble.keys import KeychainKeyStore, MemoryKeyStore
 from .ble.link import WatchLink
 from .core.findphone import FindPhone
 from .core.jobs import JobQueue
+from .core.media import MediaService
 from .core.power import WakeWatcher
 from .core.rules import RulesEngine
 from .core.scheduler import SyncScheduler
@@ -92,6 +93,8 @@ async def serve(args: argparse.Namespace) -> None:
     settings = SettingsService(link, store)
     finder = FindPhone(store)
     link.subscribe(finder.on_link_event)
+    media = MediaService(store, queue)
+    link.subscribe(media.on_link_event)
 
     rules = RulesEngine(store, queue, APP_DIR / "rules.json", faces.refresh_after_sync, link.status)
     if rules.error:
@@ -100,7 +103,19 @@ async def serve(args: argparse.Namespace) -> None:
     queue.on_done.append(rules.on_job_done)
     ui_dir = Path(__file__).resolve().parents[2] / "ui" / "dist"  # built by `cd ui && npm run build`
     app = create_app(
-        link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules, native, weather, settings
+        link,
+        queue,
+        store,
+        ensure_token(),
+        APP_DIR / "faces",
+        sync,
+        faces,
+        ui_dir,
+        rules,
+        native,
+        weather,
+        settings,
+        media,
     )
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
@@ -113,6 +128,7 @@ async def serve(args: argparse.Namespace) -> None:
     wake_task = asyncio.create_task(WakeWatcher(on_wake).run(), name="wake")
     sync_task = asyncio.create_task(SyncScheduler(queue, link, interval_s=args.sync_every * 60).run(), name="sync")
     weather_task = asyncio.create_task(weather.run(link), name="weather")
+    media_task = asyncio.create_task(media.run_loop(link), name="media")
     log.info("watchd up: %s, api http://127.0.0.1:%d, db %s", address, args.port, db_path)
     try:
         await server.serve()  # returns on SIGINT/SIGTERM
@@ -120,6 +136,7 @@ async def serve(args: argparse.Namespace) -> None:
         wake_task.cancel()
         sync_task.cancel()
         weather_task.cancel()
+        media_task.cancel()
         await link.stop()
         await queue.stop()
         await rules.close()

@@ -32,6 +32,7 @@ from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core import settings as settings_mod
 from ..core.jobs import JobQueue
+from ..core.media import MediaService, MediaSettings
 from ..core.rules import RulesEngine
 from ..core.settings import (
     Alarm,
@@ -104,6 +105,7 @@ def create_app(
     native: NativeService | None = None,
     weather: WeatherService | None = None,
     settings: SettingsService | None = None,
+    media: MediaService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -533,6 +535,24 @@ def create_app(
             out[name] = raw.hex() if raw is not None else None
         store.add_event("settings_probe", out)
         return out
+
+    @app.get("/media", dependencies=[Depends(auth)])
+    async def get_media() -> dict[str, Any]:
+        if media is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "media not configured")
+        return media.public()
+
+    @app.put("/media/settings", dependencies=[Depends(auth)])
+    async def put_media_settings(body: MediaSettings) -> dict[str, Any]:
+        if media is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "media not configured")
+        media.save(body)
+        if (body.show_now_playing or body.buttons_control_music) and link.connected.is_set():
+            if body.show_now_playing:
+                await media.push_if_changed()
+            else:
+                queue.submit("set_music", {"track": "CMF Studio", "artist": "", "state": 0}, ttl_s=60)
+        return media.public()
 
     @app.get("/workouts", dependencies=[Depends(auth)])
     async def get_workouts(limit: int = Query(30, ge=1, le=500)) -> list[dict[str, Any]]:

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { get, post } from "../lib/api";
+  import MusicCard from "../lib/MusicCard.svelte";
   import WeatherCard from "../lib/WeatherCard.svelte";
 
   let { status, onchange }: { status: any; onchange: () => void } = $props();
@@ -63,6 +64,7 @@
   </section>
 
   <WeatherCard />
+  <MusicCard />
 
   <section class="card wide">
     <h2>Recent activity</h2>
