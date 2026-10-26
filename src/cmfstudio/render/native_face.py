@@ -18,6 +18,7 @@ import asyncio
 import io
 import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -42,9 +43,9 @@ TEMPLATE_DIR = Path(
 )
 # id -> (name, description). Ids are the store dial ids the structures come from (spec Appendix A).
 TEMPLATES: dict[int, tuple[str, str]] = {
-    362: ("Steady", "huge hours and minutes either side, small seconds between"),
+    362: ("Steady", "huge hours and minutes either side, date and weekday between"),
     359: ("Ring Data", "time in the middle of a segmented ring, with steps and date"),
-    288: ("Type", "stacked big digits, date above"),
+    288: ("Type", "big hours and minutes, the date above them"),
 }
 TemplateId = Literal[362, 359, 288]
 
@@ -80,12 +81,14 @@ def template_path(template: int) -> Path:
     return path
 
 
+@lru_cache(maxsize=1)
 def available_templates() -> list[dict]:
-    return [
-        {"id": t, "name": name, "description": desc}
-        for t, (name, desc) in TEMPLATES.items()
-        if (TEMPLATE_DIR / f"{t}.bin").exists()
-    ]
+    out = []
+    for t, (name, desc) in TEMPLATES.items():
+        if (TEMPLATE_DIR / f"{t}.bin").exists():
+            has_bg = bool(NativeDial((TEMPLATE_DIR / f"{t}.bin").read_bytes()).backgrounds())
+            out.append({"id": t, "name": name, "description": desc, "has_background": has_bg})
+    return out
 
 
 async def build(
@@ -195,7 +198,8 @@ def _background(spec: NativeSpec, image: Image.Image | None) -> np.ndarray | Non
     if spec.background:
         top = _rgb(spec.background)
         bottom = _rgb(spec.background_bottom) if spec.background_bottom else top
-        return gradient(SIZE, SIZE, top, bottom)
+        img = Image.fromarray(gradient(SIZE, SIZE, top, bottom)[..., :3])
+        return np.asarray(raster.dither_rgb565(img).convert("RGBA"))  # RGB565 bands a smooth gradient otherwise
     return None
 
 
