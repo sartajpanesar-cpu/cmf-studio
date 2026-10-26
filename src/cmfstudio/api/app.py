@@ -31,8 +31,11 @@ from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core.jobs import JobQueue
 from ..core.rules import RulesEngine
-from ..render import clock, describe
+from ..render import clock, describe, native_face
 from ..render import html as render_html
+from ..render.native import NativeFormatError
+from ..render.native_face import NativeSpec
+from ..render.native_service import NativeService, preview_payload
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
 from ..store.db import Job, Store
@@ -83,6 +86,7 @@ def create_app(
     faces: FaceService | None = None,
     ui_dir: Path | None = None,
     rules: RulesEngine | None = None,
+    native: NativeService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -320,6 +324,59 @@ def create_app(
     @app.get("/events", dependencies=[Depends(auth)])
     async def get_events(limit: int = Query(100, ge=1, le=1000), kind: str | None = None) -> list[dict[str, Any]]:
         return store.events(limit, kind)
+
+    # -- native faces (structured dials: firmware-drawn time in your font) -------------------------------------
+
+    def need_native() -> NativeService:
+        if native is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "native faces not configured")
+        return native
+
+    async def native_call(coro):  # type: ignore[no-untyped-def]
+        try:
+            return await coro
+        except FileNotFoundError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        except NativeFormatError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    @app.get("/native/templates", dependencies=[Depends(auth)])
+    async def get_native_templates() -> list[dict[str, Any]]:
+        return native_face.available_templates()
+
+    @app.post("/native/preview", dependencies=[Depends(auth)])
+    async def post_native_preview(spec: NativeSpec) -> dict[str, Any]:
+        return preview_payload(await native_call(need_native().build(spec)))
+
+    @app.get("/native/faces", dependencies=[Depends(auth)])
+    async def get_native_faces() -> list[dict[str, Any]]:
+        return [{**f, "spec": json.loads(f.pop("spec_json"))} for f in store.native_faces()]
+
+    @app.post("/native/faces", dependencies=[Depends(auth)])
+    async def post_native_face(spec: NativeSpec) -> dict[str, Any]:
+        return {"id": need_native().save(spec)}
+
+    @app.post("/native/faces/{face_id}/install", dependencies=[Depends(auth)])
+    async def post_native_install(
+        face_id: int,
+        confirm: bool = Query(False, description="required: replaces a face on the watch"),
+        replace: int | None = Query(None, description="stock dial id to replace (first install only)"),
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "installing replaces a face on the watch; send confirm=true"
+            )
+        try:
+            need_native().spec(face_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such native face") from None
+        return await native_call(need_native().install(face_id, replace))
+
+    @app.get("/watch/dials", dependencies=[Depends(auth)])
+    async def get_watch_dials() -> dict[str, Any]:
+        return need_native().dials()
 
     @app.get("/rules", dependencies=[Depends(auth)])
     async def get_rules() -> dict[str, Any]:

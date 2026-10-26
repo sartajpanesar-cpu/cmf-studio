@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 Handler = Callable[[WatchLink, dict[str, Any]], Awaitable[Any]]
 
 
+class FinalError(Exception):
+    """A job failure that retrying can't fix (e.g. the watch rejected a face): fail at once."""
+
+
 async def _notify(link: WatchLink, a: dict[str, Any]) -> dict[str, Any]:
     acked = await link.notify(a["title"], a.get("body", ""), a.get("icon", 0xFF))
     return {"acked": acked}
@@ -46,11 +50,23 @@ async def _install_face(link: WatchLink, a: dict[str, Any]) -> dict[str, Any]:
     return {"activated": activated}
 
 
+async def _install_native(link: WatchLink, a: dict[str, Any]) -> dict[str, Any]:
+    blob = Path(a["bin_path"]).read_bytes()
+    try:
+        result = await link.install_native_face(blob, a["old_id"], a["new_id"])
+    except ValueError as exc:  # old_id no longer on the watch
+        raise FinalError(str(exc)) from exc
+    if result != 1:
+        raise FinalError(f"watch didn't activate the face (finish byte {result:#04x})")
+    return {"activated": True, "dial_id": a["new_id"], "replaced": a["old_id"]}
+
+
 HANDLERS: dict[str, Handler] = {
     "notify": _notify,
     "info": _info,
     "set_music": _set_music,
     "install_face": _install_face,
+    "install_native": _install_native,
 }
 
 TERMINAL = ("done", "failed", "expired")
@@ -151,7 +167,7 @@ class JobQueue:
                 continue
             except Exception as exc:
                 log.warning("job %s (%s) attempt %d failed: %r", job.id, job.kind, attempts, exc)
-                if attempts >= self.max_attempts:
+                if attempts >= self.max_attempts or isinstance(exc, FinalError):
                     self._queue.popleft()
                     self._finish(job.id, state="failed", error=repr(exc))
                 else:

@@ -25,6 +25,7 @@ from .core.jobs import JobQueue
 from .core.power import WakeWatcher
 from .core.rules import RulesEngine
 from .core.scheduler import SyncScheduler
+from .render.native_service import NativeService
 from .render.service import FaceService
 from .store.db import Store
 from .sync.manager import SyncManager
@@ -62,9 +63,9 @@ async def find_address() -> str:
 
 async def serve(args: argparse.Namespace) -> None:
     if args.sim:
-        from cmfkit.transport.sim import SimWatch
+        from .ble.sim import StudioSim
 
-        sim = SimWatch(on_event=lambda m: log.info("[sim watch] %s", m))
+        sim = StudioSim(on_event=lambda m: log.info("[sim watch] %s", m))
         address, factory, keys = "SIM", (lambda _a: sim), MemoryKeyStore()
         db_path = args.db or APP_DIR / "sim.db"
     else:
@@ -83,6 +84,7 @@ async def serve(args: argparse.Namespace) -> None:
     sync.attach(link)
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
     faces = FaceService(store, link, queue, APP_DIR / "faces")
+    native = NativeService(store, link, queue, APP_DIR / "faces", faces)
 
     rules = RulesEngine(store, queue, APP_DIR / "rules.json", faces.refresh_after_sync, link.status)
     if rules.error:
@@ -90,7 +92,7 @@ async def serve(args: argparse.Namespace) -> None:
     link.subscribe(rules.on_link_event)
     queue.on_done.append(rules.on_job_done)
     ui_dir = Path(__file__).resolve().parents[2] / "ui" / "dist"  # built by `cd ui && npm run build`
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules)
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules, native)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:

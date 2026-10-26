@@ -70,11 +70,7 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 - [ ] Widgets editor (port Gadgetbridge widget setup) (**deferred** by owner 2026-10-26: Gadgetbridge has no CMF widget code to port; only the QUICK_CARD opcode FFFF 906D/A06D is known. Revisit with new evidence)
 
 ## Backlog (owner priorities)
-1. **Custom time font** (owner: "I really want to change the time font"). Photo dials can't: the clock is one of 5
-   firmware styles (findings 2026-10-26). Path: structured dials — re-skin a store dial's digit sprite atlas
-   (`img_number`, spec §11.6/§11.10) with digits rendered in any font; live time, up to 7 slots. Needs a container
-   editor (two header CRC32s, never grow the file, fresh install) and store dial binaries (spec repo
-   `wfweb/public/templates` has 5). Firmware font replacement is Tier 3 — not this.
+1. ~~Custom time font~~ → Phase 5b (native faces).
 2. Widgets / quick-card editor (deferred: no Gadgetbridge code; only opcode FFFF 906D known).
 3. Measure on-watch buffer length (Phase 2 deferred).
 
@@ -90,6 +86,21 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
   Pipe-tested against the real watch 2026-10-26 (job acked)
 - [x] Threat model + least-privilege write-up (portfolio artifact): `docs/07-threat-model.md`. Writing it found and
   fixed two renderer issues (font-name markup injection, unrestricted local file reads) plus JS-off, fonts-only egress
+
+## Phase 5b — Watch features, no firmware risk (owner-directed 2026-10-26)
+Owner: "go in that order and keep going through all features, test and implement into the web controller". Every
+item: sim/fixture tests first, then the web UI, then a check on the watch. Nothing here writes firmware (Tier 3).
+- [ ] **Native faces — your font for the firmware-drawn time.** Structured dials built from the spec's digital
+  templates (362 Steady, 359 Ring Data, 288 Type): every digit set re-drawn in any Google/local font, digit colour,
+  background colour/gradient/picture; asset pool rebuilt with every ref tail re-pointed (`render/native*.py`).
+  Installs over a stock face's slot (9075 replace). Sim-tested; on-device install pending
+- [ ] Weather push (+ the city line as a glance: next calendar event)
+- [ ] Settings through watchd / UI / MCP: alarms (read-modify-write), goals, Do Not Disturb, standing/water
+  reminders, health monitoring switches, HR alerts, units / 24h, world clock, sports menu, quick replies
+- [ ] Workouts + GPS routes decoded from sync (read-only)
+- [ ] Find my watch; find phone → Mac sound
+- [ ] Mac now-playing ↔ watch music card and buttons
+- [ ] (careful) home tiles: reorder ids read back from the watch only; contacts as an info panel, backed up first
 
 ## Phase 6 — Firmware research (read-only, optional) · open-ended
 - [ ] Obtain stock OTA for the current firmware version
