@@ -137,8 +137,9 @@ def _ring(layer: RingLayer, ctx: Context) -> str:
 def build(spec: FaceSpec, ctx: Context, base_dir: Path | str = ".") -> str:
     base = Path(base_dir)
     links, faces = _font_css(spec, base)
-    body = []
-    for layer in spec.layers:
+    body: list[str] = []
+    for index, layer in enumerate(spec.layers):
+        start = len(body)
         if isinstance(layer, TextLayer):
             body.append(_text(layer, ctx))
         elif isinstance(layer, ImageLayer):
@@ -152,6 +153,9 @@ def build(spec: FaceSpec, ctx: Context, base_dir: Path | str = ".") -> str:
             body.append(_rect(layer))
         elif isinstance(layer, RingLayer):
             body.append(_ring(layer, ctx))
+        if len(body) > start:  # tag the layer's root element so the Studio can measure / hit-test it
+            tag, rest = body[-1].split(" ", 1)
+            body[-1] = f'{tag} data-layer="{index}" {rest}'
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">{links}
 <style>{faces}

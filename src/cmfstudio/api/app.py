@@ -53,6 +53,7 @@ class NotifyIn(BaseModel):
 
 class DescribeIn(BaseModel):
     description: str = Field(min_length=3, max_length=1000)
+    current: FaceSpec | None = Field(default=None, description="if given, Claude edits this design instead")
 
 
 async def call_claude(coro):
@@ -201,7 +202,10 @@ def create_app(
     async def post_face_describe(body: DescribeIn) -> dict[str, Any]:
         """Claude designs a FaceSpec from a description; returns it with a preview. Nothing is installed."""
         svc = need_faces()
-        spec = await call_claude(describe.describe_face(body.description, svc.context()))
+        if body.current is not None:
+            spec = await call_claude(describe.edit_face(body.description, body.current, svc.context()))
+        else:
+            spec = await call_claude(describe.describe_face(body.description, svc.context()))
         r = await svc.preview(spec)
         return {
             "spec": spec.model_dump(by_alias=True),

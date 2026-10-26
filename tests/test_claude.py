@@ -13,6 +13,7 @@ from cmfstudio.core.jobs import JobQueue
 from cmfstudio.render import describe
 from cmfstudio.render.bindings import Context
 from cmfstudio.render.service import FaceService
+from cmfstudio.render.spec import FaceSpec
 from cmfstudio.store.db import Store
 from cmfstudio.sync import daily, summary
 from cmfstudio.sync.parsers import Sample
@@ -181,3 +182,55 @@ async def test_api_describe_returns_spec_and_preview(client, monkeypatch):
 async def test_payload_endpoint_shows_what_is_sent(client):
     r = (await client.get("/health/summary/payload", headers=AUTH)).json()
     assert len(r["days"]) == 14 and "baselines_28d" in r
+
+
+async def test_edit_sends_current_design_and_keeps_images_and_local_fonts(monkeypatch):
+    from cmfstudio.render.describe import edit_face
+
+    current = FaceSpec.model_validate(
+        {
+            "name": "mine",
+            "fonts": [{"family": "MyFont", "source": "local", "path": "data:font/ttf;base64,AAAA"}],
+            "layers": [
+                {"type": "image", "src": "data:image/png;base64,AAAA", "w": 466, "h": 466},
+                {"type": "text", "bind": "metric:steps", "font": "MyFont", "x": 233, "y": 300},
+            ],
+        }
+    )
+    revised = design(
+        name="mine", layers=[{"kind": "text", "bind": "metric:steps", "font": "MyFont", "color": "#88ccff"}]
+    )
+    m = fake_client(monkeypatch, ok(revised))
+    out = await edit_face("make the steps light blue", current, Context())
+    sent = m.calls[0]["messages"][0]["content"]
+    assert '"bind":"metric:steps"' in sent and "make the steps light blue" in sent
+    assert "data:image" not in sent  # images aren't sent to Claude
+    assert out.layers[0].type == "image" and out.layers[1].color == "#88ccff"
+    assert out.fonts[0].source == "local" and out.fonts[0].family == "MyFont"
+
+
+def test_from_spec_round_trips():
+    from cmfstudio.render.describe import from_spec, to_spec
+
+    spec = FaceSpec.model_validate(
+        {
+            "name": "rt",
+            "clock": {"style": 3, "x": 63, "y": 171, "color": "#e8f6ff"},
+            "layers": [
+                {
+                    "type": "text",
+                    "bind": "date:%A",
+                    "x": 233,
+                    "y": 145,
+                    "size": 28,
+                    "color": "#7fd0ff",
+                    "font": "Montserrat",
+                },
+                {"type": "ring", "bind": "metric:steps", "max": 8000, "r": 215, "width": 8, "color": "#7fd0ff"},
+                {"type": "rect", "x": 203, "y": 300, "w": 60, "h": 2, "fill": "#7fd0ff"},
+            ],
+        }
+    )
+    back = to_spec(from_spec(spec), spec)
+    assert back.clock == spec.clock and len(back.layers) == 3
+    assert back.layers[0].bind == "date:%A" and back.layers[1].max == 8000 and back.layers[2].w == 60

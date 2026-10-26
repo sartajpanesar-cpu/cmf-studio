@@ -87,7 +87,7 @@ def _hex(value: str, default: str) -> str:
     return value.lower() if HEX.match(value or "") else default
 
 
-def to_spec(d: Design) -> FaceSpec:
+def to_spec(d: Design, current: FaceSpec | None = None) -> FaceSpec:
     layers: list[dict] = []
     for layer in d.layers:
         color = _hex(layer.color, "#ffffff")
@@ -144,12 +144,17 @@ def to_spec(d: Design) -> FaceSpec:
                     "fill": color,
                 }
             )
-    fonts = sorted({entry["font"] for entry in layers if entry.get("font")})
+    used = sorted({entry["font"] for entry in layers if entry.get("font")})
+    local = {f.family: f for f in (current.fonts if current else []) if f.source == "local"}
+    fonts = [
+        local[f].model_dump() if f in local else {"family": f, "source": "google", "weights": [300, 400, 500, 600, 700]}
+        for f in used
+    ]
     return FaceSpec.model_validate(
         {
             "name": re.sub(r"[^a-z0-9-]+", "-", d.name.lower()).strip("-")[:60] or "claude-face",
             "background": _hex(d.background, "#000000"),
-            "fonts": [{"family": f, "source": "google", "weights": [300, 400, 500, 600, 700]} for f in fonts],
+            "fonts": fonts,
             "layers": layers,
             "clock": {
                 "style": max(0, min(d.clock_style - 1, 4)),
@@ -167,3 +172,87 @@ async def describe_face(description: str, ctx: Context) -> FaceSpec:
     user = f"Design a watch face: {description.strip()}\n\n(Metrics with data today: {available}.)"
     design: Design = await claude.parse(Design, system=SYSTEM, user=user, effort="medium")
     return to_spec(design)
+
+
+def from_spec(spec: FaceSpec) -> Design:
+    """The current FaceSpec in Claude's flat Design shape (image layers can't be expressed; see edit_face)."""
+
+    def layer(kind, x, y, size, color, *, text="", bind="", height=0, font="", weight=400, align="center", goal=0):
+        return DesignLayer(
+            kind=kind,
+            text=text,
+            bind=bind,
+            x=x,
+            y=y,
+            size=size,
+            height=height,
+            color=color,
+            font=font,
+            weight=weight,
+            align=align,
+            goal=goal,
+        )
+
+    layers: list[DesignLayer] = []
+    for item in spec.layers:
+        if item.type == "text":
+            layers.append(
+                layer(
+                    "text",
+                    item.x,
+                    item.y,
+                    item.size,
+                    item.color,
+                    text=item.text or "",
+                    bind=item.bind or "",
+                    font=item.font or "",
+                    weight=item.weight,
+                    align=item.align,
+                )
+            )
+        elif item.type == "ring":
+            layers.append(
+                layer(
+                    "ring",
+                    item.cx,
+                    item.cy,
+                    item.r,
+                    item.color,
+                    bind=item.bind,
+                    height=int(item.width),
+                    goal=int(item.max),
+                )
+            )
+        elif item.type == "circle":
+            layers.append(
+                layer("circle", item.cx, item.cy, item.r, item.stroke or item.fill or "#ffffff", height=int(item.width))
+            )
+        elif item.type == "rect":
+            layers.append(layer("rect", item.x, item.y, item.w, item.fill, height=item.h))
+    clock = spec.clock
+    return Design(
+        name=spec.name,
+        background=spec.background,
+        clock_style=clock.style + 1,
+        clock_x=clock.x,
+        clock_y=clock.y,
+        clock_color=clock.color,
+        layers=layers,
+    )
+
+
+async def edit_face(request: str, current: FaceSpec, ctx: Context) -> FaceSpec:
+    """Apply a change request to the current design; returns the whole revised design."""
+    available = ", ".join(sorted(ctx.metrics)) or "none yet"
+    user = (
+        "Here is the current watch face design:\n"
+        + from_spec(current).model_dump_json()
+        + f"\n\nChange it as follows: {request.strip()}\n\n"
+        "Return the complete revised design. Keep everything the request doesn't ask to change exactly as it is "
+        f"(same layers, positions, fonts, colours and name). (Metrics with data today: {available}.)"
+    )
+    design: Design = await claude.parse(Design, system=SYSTEM, user=user, effort="medium")
+    revised = to_spec(design, current)
+    # image layers and uploaded fonts can't round-trip through Claude: carry them over unchanged
+    images = [layer for layer in current.layers if layer.type == "image"]
+    return revised.model_copy(update={"layers": images + list(revised.layers)})

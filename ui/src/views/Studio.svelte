@@ -21,14 +21,18 @@
   let idea = $state("");
   let describing = $state(false);
 
+  let claudeMode = $state<"edit" | "new">("edit");
+
   async function describe() {
     describing = true;
     error = null;
     try {
-      const r = await post("/faces/describe", { description: idea });
+      const editing = claudeMode === "edit" && spec.layers.length > 0;
+      const r = await post("/faces/describe", { description: idea, ...(editing ? { current: withFonts(spec) } : {}) });
       spec = r.spec;
-      selected = spec.layers.length ? 0 : null;
-      notice = `Claude designed “${r.spec.name}”. Tweak it, then Save or Install.`;
+      selected = selected != null && selected < spec.layers.length ? selected : spec.layers.length ? 0 : null;
+      notice = editing ? "Claude updated the design." : `Claude designed “${r.spec.name}”. Tweak it, then Save or Install.`;
+      idea = "";
     } catch (e: any) {
       error = e.message;
     } finally {
@@ -154,20 +158,58 @@
     selected = j;
   }
 
-  // drag on the preview: moves the clock if the drag starts on it, otherwise the selected layer
-  let grab = { dx: 0, dy: 0 };
-  function point(x: number, y: number, phase: "start" | "move" | "end", onClock: boolean) {
-    if (onClock) {
-      if (phase === "start") grab = { dx: x - spec.clock.x, dy: y - spec.clock.y };
-      spec.clock.x = Math.max(0, Math.min(SIZE - 1, x - grab.dx));
-      spec.clock.y = Math.max(0, Math.min(SIZE - 1, y - grab.dy));
+  // ---- selection, dragging, centring, nudging -------------------------------------------------
+  let clockSel = $state(false);
+  let boxes = $state<Record<number, [number, number, number, number]>>({});
+  const target = $derived<number | "clock" | null>(clockSel ? "clock" : selected);
+
+  function selectTarget(t: number | "clock" | null) {
+    clockSel = t === "clock";
+    if (t !== "clock") selected = t;
+  }
+
+  function setAnchor(t: number | "clock", x: number, y: number) {
+    if (t === "clock") {
+      spec.clock.x = Math.max(0, Math.min(SIZE - 1, x));
+      spec.clock.y = Math.max(0, Math.min(SIZE - 1, y));
       return;
     }
-    if (selected == null) return;
-    const l = spec.layers[selected];
-    if (l.type === "circle" || l.type === "ring") { l.cx = x; l.cy = y; }
-    else if (l.type === "text") { l.x = x; l.y = y; }
-    else { l.x = Math.round(x - l.w / 2); l.y = Math.round(y - l.h / 2); }
+    const l = spec.layers[t];
+    if (l.type === "circle" || l.type === "ring") { l.cx = x; l.cy = y; } else { l.x = x; l.y = y; }
+  }
+
+  function anchorOf(t: number | "clock"): [number, number] {
+    if (t === "clock") return [spec.clock.x, spec.clock.y];
+    const l = spec.layers[t];
+    return l.type === "circle" || l.type === "ring" ? [l.cx, l.cy] : [l.x, l.y];
+  }
+
+  function boxOf(t: number | "clock"): [number, number, number, number] | null {
+    if (t === "clock") return clockBox;
+    const l = spec.layers[t];
+    if (l.type === "circle" || l.type === "ring") return [l.cx - l.r, l.cy - l.r, l.cx + l.r, l.cy + l.r];
+    if (l.type === "rect" || l.type === "image") return [l.x, l.y, l.x + l.w, l.y + l.h];
+    return boxes[t] ?? null;
+  }
+
+  function centre(t: number | "clock" | null, axis: "x" | "y") {
+    if (t === null) return;
+    const b = boxOf(t);
+    if (!b) return;
+    const [ax, ay] = anchorOf(t);
+    const d = axis === "x" ? SIZE / 2 - (b[0] + b[2]) / 2 : SIZE / 2 - (b[1] + b[3]) / 2;
+    setAnchor(t, Math.round(axis === "x" ? ax + d : ax), Math.round(axis === "y" ? ay + d : ay));
+  }
+
+  function nudge(e: KeyboardEvent) {
+    const tag = (document.activeElement?.tagName ?? "").toLowerCase();
+    if (target === null || ["input", "select", "textarea"].includes(tag)) return;
+    const step = e.shiftKey ? 10 : 1;
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const [x, y] = anchorOf(target);
+    setAnchor(target, x + d[0], y + d[1]);
   }
 
   function readFile(file: File): Promise<string> {
@@ -205,15 +247,21 @@
   const clockStyles = [0, 1, 2, 3, 4];
 </script>
 
+<svelte:window onkeydown={nudge} />
 <div class="studio">
   <aside class="card left">
-    <div class="field"><span>Describe a face</span>
-      <textarea rows="3" bind:value={idea} placeholder="e.g. art deco, gold on black, big step count, sleep and resting heart rate at the bottom"></textarea>
+    <div class="field"><span>Ask Claude</span>
+      <div class="seg">
+        <button class:on={claudeMode === "edit"} onclick={() => (claudeMode = "edit")} disabled={!spec.layers.length}>Change this design</button>
+        <button class:on={claudeMode === "new" || !spec.layers.length} onclick={() => (claudeMode = "new")}>New design</button>
+      </div>
+      <textarea rows="3" bind:value={idea}
+        placeholder={claudeMode === "edit" && spec.layers.length ? "e.g. make the date smaller and move steps to the bottom" : "e.g. art deco, gold on black, big step count, sleep and resting heart rate at the bottom"}></textarea>
     </div>
     <button class="small" disabled={describing || idea.trim().length < 3} onclick={describe}>
-      {describing ? "Claude is designing…" : "Design it with Claude"}
+      {describing ? "Claude is working…" : claudeMode === "edit" && spec.layers.length ? "Apply with Claude" : "Design it with Claude"}
     </button>
-    <p class="faint tiny">Replaces the current draft. Nothing is installed until you choose to.</p>
+    <p class="faint tiny">Nothing is installed until you choose to.</p>
 
     <div class="field"><span>Name</span><input bind:value={spec.name} maxlength="60" /></div>
     <div class="row2">
@@ -234,13 +282,17 @@
       <div class="field"><span>X</span><input type="number" min="0" max="465" bind:value={spec.clock.x} /></div>
       <div class="field"><span>Y</span><input type="number" min="0" max="465" bind:value={spec.clock.y} /></div>
     </div>
-    <p class="faint tiny">Drag the clock on the preview to move it.</p>
+    <div class="row2 centres">
+      <button class="small" onclick={() => centre("clock", "x")}>Centre ↔</button>
+      <button class="small" onclick={() => centre("clock", "y")}>Centre ↕</button>
+    </div>
+    <p class="faint tiny">Or drag the clock on the preview.</p>
 
     <h3>Layers <span class="faint">(bottom → top)</span></h3>
     <ul class="layers">
       {#each spec.layers as l, i}
         <li class:on={selected === i}>
-          <button class="pick" onclick={() => (selected = i)}>{layerTitle(l)}</button>
+          <button class="pick" onclick={() => selectTarget(i)}>{layerTitle(l)}</button>
           <button class="icon" onclick={() => move(i, -1)} disabled={i === 0} aria-label="move down">↓</button>
           <button class="icon" onclick={() => move(i, 1)} disabled={i === spec.layers.length - 1} aria-label="move up">↑</button>
           <button class="icon" onclick={() => remove(i)} aria-label="delete layer">✕</button>
@@ -262,9 +314,11 @@
       <button class:on={mode === "live"} onclick={() => (mode = "live")}>Live</button>
       <button class:on={mode === "exact"} onclick={() => (mode = "exact")} disabled={!preview}>Exact watch render</button>
     </div>
-    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} {clockSvg} {clockBox} onpoint={point} />
+    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} {clockSvg} {clockBox}
+      clockAnchor={[spec.clock.x, spec.clock.y]} layers={spec.layers} selected={target}
+      onselect={selectTarget} onmove={setAnchor} onboxes={(b) => (boxes = b)} />
     <p class="faint small center-text">
-      Drag to move the selected layer or the clock ·
+      Drag anything to move it (snaps to centre) · arrow keys nudge ·
       {#if rendering}checking exact render…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB · {Math.round(preview.checks.lit_fraction * 100)}% lit{/if}
     </p>
     {#if preview?.checks.warnings.length}
@@ -297,6 +351,10 @@
   <aside class="card right">
     {#if sel}
       <h3>{layerTitle(sel)}</h3>
+      <div class="row2 centres">
+        <button class="small" onclick={() => centre(selected, "x")}>Centre ↔</button>
+        <button class="small" onclick={() => centre(selected, "y")}>Centre ↕</button>
+      </div>
       {#if sel.type === "text"}
         <div class="field"><span>Content</span>
           <select value={textMode(sel)} onchange={(e) => setTextMode(sel, (e.currentTarget as HTMLSelectElement).value)}>
@@ -427,7 +485,11 @@
   .confirm { max-width: 420px; margin-top: 8px; }
   .confirm p { margin-top: 0; }
   .confirm button { margin-right: 6px; }
-  textarea { width: 100%; resize: vertical; }
+  textarea { width: 100%; resize: vertical; margin-top: 6px; }
+  .seg { display: flex; gap: 4px; }
+  .seg button { flex: 1; font-size: 12px; padding: 4px 6px; background: none; }
+  .seg button.on { background: var(--surface-2); border-color: var(--faint); }
+  .centres { margin: 4px 0 10px; }
   .tiny { font-size: 11px; margin: 4px 0 12px; }
   .file { display: grid; gap: 3px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
   .inline { display: flex; align-items: center; gap: 6px; }
