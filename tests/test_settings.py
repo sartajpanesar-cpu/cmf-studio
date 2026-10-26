@@ -129,3 +129,33 @@ async def test_find_phone_rings_until_stopped():
     finder.on_link_event({"kind": "find_phone", "start": False})
     await asyncio.sleep(0.05)
     assert not finder.ringing
+
+
+async def test_tiles_are_read_only_and_parsed(api):
+    c, *_ = api
+    screens = (await c.get("/settings/tiles")).json()["screens"]
+    assert [len(s) for s in screens] == [2, 3, 3, 3]
+    assert screens[0][0] == {"id": 93, "sport": 0, "name": "Activity record"}
+    assert screens[2][2] == {"id": 90, "sport": 2, "name": "Sport"}
+    assert (await c.put("/settings/tiles", json=[])).status_code == 405, "no way to write tiles"
+
+
+async def test_contacts_info_panel_with_backup(api):
+    c, watch, store = api
+    lines = [{"name": "Milk, eggs, bread"}, {"name": "Gate code", "number": "4821"}, {"name": "é" * 40}]
+    r = (await c.put("/settings/contacts", json=lines)).json()
+    assert r["ok"]
+    got = (await c.get("/settings/contacts")).json()
+    assert got["contacts"][1] == {"name": "Gate code", "number": "4821"} and got["contacts"][2]["name"] == "é" * 16
+    assert got["backups"] == [], "the watch had no contacts: nothing to back up"
+    await c.put("/settings/contacts", json=[{"name": "next"}])
+    backups = (await c.get("/settings/contacts")).json()["backups"]
+    assert backups[0]["contacts"][0]["name"] == "Milk, eggs, bread"
+    assert (await c.put("/settings/contacts", json=[{"name": "x"}] * 21)).status_code == 422
+
+
+async def test_clearing_contacts_writes_one_blank_record(api):
+    c, watch, _ = api
+    await c.put("/settings/contacts", json=[{"name": "temp"}])
+    assert (await c.put("/settings/contacts", json=[])).json()["ok"]
+    assert watch.settings[0x00D5] == bytes(57) and (await c.get("/settings/contacts")).json()["contacts"] == []

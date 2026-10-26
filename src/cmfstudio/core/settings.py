@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import struct
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -187,6 +188,105 @@ def encode_reminder(r: Reminder) -> bytes:
     start = _secs(r.quiet_start) if r.enabled and r.quiet_start and r.quiet_end else 0
     end = _secs(r.quiet_end) if r.enabled and r.quiet_start and r.quiet_end else 0
     return struct.pack(">BHII", int(r.enabled), r.every_min, start, end)
+
+
+# -- home tiles (QUICK_CARD, FFFF 906D/A06D; spec §16) — READ ONLY ------------------------------------------------
+# A SET with an unknown card id wipes the watch's screens (recoverable only via Nothing X), and the SET framing isn't
+# documented, so tiles are only read here.
+
+QUICK_CARD, QUICK_CARD_RET = Op(0xFFFF, 0x906D), Op(0xFFFF, 0xA06D)
+CARD_TYPES = [
+    (1, 6, "Steps"),
+    (7, 12, "Calories"),
+    (13, 18, "Stand"),
+    (19, 24, "Moderate activity"),
+    (25, 30, "Heart rate"),
+    (31, 36, "SpO₂"),
+    (37, 42, "Stress"),
+    (43, 48, "Sleep"),
+    (49, 53, "Weather"),
+    (97, 98, "Weather"),
+    (54, 58, "Timer"),
+    (59, 62, "Breathing"),
+    (63, 63, "Stopwatch"),
+    (65, 67, "Stopwatch"),
+    (68, 71, "Battery"),
+    (72, 76, "Recents"),
+    (77, 81, "Contacts"),
+    (82, 86, "Dial / phone"),
+    (87, 91, "Sport"),
+    (92, 92, "Music"),
+    (93, 93, "Activity record"),
+    (94, 94, "PAI"),
+    (96, 96, "Cycle"),
+]
+
+
+def card_name(card_id: int) -> str:
+    if card_id == 0:
+        return "empty"
+    return next((n for lo, hi, n in CARD_TYPES if lo <= card_id <= hi), f"card {card_id}")
+
+
+def parse_tiles(raw: bytes) -> list[list[dict[str, Any]]]:
+    """``status · 00 · N · N × (01 · K · K × (card id, sport id))`` → screens of cards."""
+    if len(raw) < 3:
+        raise SettingsError(f"unexpected tiles reply {raw.hex()}")
+    screens, i = [], 3
+    for _ in range(raw[2]):
+        if i + 2 > len(raw) or raw[i] != 0x01:
+            raise SettingsError(f"unexpected tiles reply {raw.hex()}")
+        k = raw[i + 1]
+        cards = raw[i + 2 : i + 2 + 2 * k]
+        screens.append(
+            [{"id": cards[j], "sport": cards[j + 1], "name": card_name(cards[j])} for j in range(0, 2 * k, 2)]
+        )
+        i += 2 + 2 * k
+    return screens
+
+
+# -- contacts as an info panel (CONTACTS_SET 00D5 0001: up to 20 × name[32] + number[25], spec §9) ------------------
+
+CONTACT_NAME, CONTACT_NUMBER, MAX_CONTACTS = 32, 25, 20
+
+
+def parse_contacts(raw: bytes) -> list[dict[str, str]]:
+    out = []
+    for i in range(0, len(raw) - 56, 57):
+        name = raw[i : i + 32].split(b"\0", 1)[0].decode("utf-8", "replace")
+        number = raw[i + 32 : i + 57].split(b"\0", 1)[0].decode("utf-8", "replace")
+        if name or number:  # an all-zero record is how the list is cleared (an empty write isn't taken)
+            out.append({"name": name, "number": number})
+    return out
+
+
+def _fit(text: str, n: int) -> bytes:
+    raw = text.encode("utf-8")[:n]
+    while raw:
+        try:
+            raw.decode("utf-8")
+            return raw
+        except UnicodeDecodeError:
+            raw = raw[:-1]
+    return raw
+
+
+def encode_contacts(entries: list[dict[str, str]]) -> bytes:
+    """``[]`` encodes as one all-zero record: the watch ignores an empty write (findings 2026-10-26)."""
+    if len(entries) > MAX_CONTACTS:
+        raise SettingsError(f"the watch shows up to {MAX_CONTACTS} contacts")
+    if not entries:
+        return bytes(CONTACT_NAME + CONTACT_NUMBER)
+    return b"".join(
+        _fit(e["name"], CONTACT_NAME).ljust(CONTACT_NAME, b"\0")
+        + _fit(e.get("number", ""), CONTACT_NUMBER).ljust(CONTACT_NUMBER, b"\0")
+        for e in entries
+    )
+
+
+class ContactLine(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    number: str = Field("", max_length=25)
 
 
 # -- request bodies -------------------------------------------------------------------------------------------------
@@ -484,6 +584,32 @@ class SettingsService:
         before = await self.read("sports")  # count + codes, same format both ways
         return await self._write_verified(
             "sports", {"list": payload}, lambda back: back[: len(payload)] == payload, before
+        )
+
+    async def tiles(self) -> list[list[dict[str, Any]]]:
+        """The watch's home screens and their cards (read-only)."""
+        async with self.link._op() as session:
+            reply = await session.request(QUICK_CARD, b"\x00", QUICK_CARD_RET, timeout=3)
+        return parse_tiles(reply.payload)
+
+    async def contacts(self) -> list[dict[str, str]]:
+        raw = await self.read("contacts")
+        return parse_contacts(raw or b"")
+
+    async def set_contacts(self, entries: list[ContactLine]) -> WriteResult:
+        """Replace the watch's contacts (e.g. as an info panel). The old list is backed up in kv first."""
+        before = await self.read("contacts")
+        backups = json.loads(self.store.get_kv("contacts_backups") or "[]")
+        if before:
+            backups = ([{"saved_at": time.time(), "contacts": parse_contacts(before)}] + backups)[:5]
+            self.store.set_kv("contacts_backups", json.dumps(backups))
+        payload = encode_contacts([e.model_dump() for e in entries])
+        want = [(_fit(e.name, CONTACT_NAME).decode(), _fit(e.number, CONTACT_NUMBER).decode()) for e in entries]
+        return await self._write_verified(
+            "contacts",
+            {"list": payload},
+            lambda back: [(c["name"], c["number"]) for c in parse_contacts(back)] == want,
+            before,
         )
 
     async def set_monitoring(self, kind: str, enabled: bool) -> WriteResult:

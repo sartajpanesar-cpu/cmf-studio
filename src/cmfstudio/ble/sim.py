@@ -22,6 +22,9 @@ from .link import CUSTOM_DIAL_ID, WF_INIT2_STRUCTURED_REPLY, WF_INIT2_STRUCTURED
 
 DIAL_COMMAND_RET = ops.DIAL_COMMAND_RET
 
+# QUICK_CARD GET reply captured by the spec author (README §16): 4 screens, 11 cards
+SPEC_TILES = bytes.fromhex("01000401025d0061000103190 02e002300".replace(" ", "") + "01035c0004005a020103480051005300")
+
 PROBED: dict[int, bytes] = {  # cmd1 -> GET reply from the owner's watch, fw 1.0.0.57 (findings 2026-10-26)
     0x0063: bytes.fromhex("30750000000000010000000000000000000000000000000000000000000000000000000000000000"),
     0x005E: bytes.fromhex("88130000a00f000090010000d00200001e0000000c01010101010101"),
@@ -60,6 +63,9 @@ class StudioSim(SimWatch):
             self.written.append((cmd1, cmd2, p))
             self.settings[cmd1] = _as_read(cmd1, p, self.settings[cmd1])
             self._reply(Op(cmd1, 0x0003))
+            return True
+        if cmd1 == 0xFFFF and cmd2 == 0x906D and p[:1] == b"\x00":
+            self._reply(Op(0xFFFF, 0xA06D), SPEC_TILES)
             return True
         if cmd1 == 0xFFFF and cmd2 in (0x9059, 0x9067, 0x9068):
             self.written.append((cmd1, cmd2, p))

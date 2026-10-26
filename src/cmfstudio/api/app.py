@@ -36,6 +36,7 @@ from ..core.media import MediaService, MediaSettings
 from ..core.rules import RulesEngine
 from ..core.settings import (
     Alarm,
+    ContactLine,
     Goals,
     HrAlerts,
     RawSetting,
@@ -489,6 +490,25 @@ def create_app(
     @app.put("/settings/units", dependencies=[Depends(auth)])
     async def put_units(body: Units) -> dict[str, Any]:
         return await settings_call(need_settings().set_units(body.metric, body.celsius))
+
+    @app.get("/settings/tiles", dependencies=[Depends(auth)])
+    async def get_tiles() -> dict[str, Any]:
+        """Home screens and their cards — read-only (a bad tile write blanks the watch's screens)."""
+        try:
+            return {"screens": await need_settings().tiles()}
+        except TimeoutError as exc:
+            raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "the watch didn't answer the tiles request") from exc
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+
+    @app.get("/settings/contacts", dependencies=[Depends(auth)])
+    async def get_contacts() -> dict[str, Any]:
+        backups = json.loads(store.get_kv("contacts_backups") or "[]")
+        return {"contacts": await settings_call(need_settings().contacts()), "backups": backups}
+
+    @app.put("/settings/contacts", dependencies=[Depends(auth)])
+    async def put_contacts(entries: list[ContactLine]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_contacts(entries))
 
     @app.get("/settings/written", dependencies=[Depends(auth)])
     async def get_written_settings() -> dict[str, Any]:
