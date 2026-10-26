@@ -137,6 +137,17 @@ def create_app(
     async def post_face(spec: FaceSpec) -> dict[str, Any]:
         return {"id": need_faces().save(spec), "name": spec.name}
 
+    @app.get("/faces/{face_id}", dependencies=[Depends(auth)])
+    async def get_face(face_id: int) -> dict[str, Any]:
+        try:
+            row = store.get_face(face_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such face") from None
+        spec = json.loads(row["spec_json"])
+        if "layers" not in spec:  # a raw photo install (`cmf face install IMAGE`), not a FaceSpec
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "not an editable face")
+        return {"id": row["id"], "spec": spec, "last_installed_at": row["last_installed_at"]}
+
     @app.post("/faces/{face_id}/install", dependencies=[Depends(auth)])
     async def post_face_id_install(face_id: int, confirm: bool = False, force: bool = False) -> dict[str, Any]:
         if not confirm:

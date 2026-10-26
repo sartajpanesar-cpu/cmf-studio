@@ -109,6 +109,9 @@ async def test_faces_api(faces, paired_link, tmp_path):
         assert (await c.post(f"/faces/{face_id}/install", headers=auth)).status_code == 400
         res = (await c.post(f"/faces/{face_id}/install", params={"confirm": True}, headers=auth)).json()
         assert res["job"]["state"] == "done"
+        loaded = (await c.get(f"/faces/{face_id}", headers=auth)).json()
+        assert FaceSpec.model_validate(loaded["spec"]) == SPEC
+        assert (await c.get("/faces/999", headers=auth)).status_code == 404
         listing = (await c.get("/faces", headers=auth)).json()
         assert listing["active_id"] == face_id and listing["faces"][0]["name"] == "steps"
         assert (await c.put("/insight", json={"text": "slept well"}, headers=auth)).status_code == 200
