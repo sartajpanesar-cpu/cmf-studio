@@ -156,6 +156,17 @@ def cmd_insight(c: Client, a: argparse.Namespace) -> None:
     print("insight set; faces with an insight layer pick it up on the next sync")
 
 
+def cmd_ui(c: Client, a: argparse.Namespace) -> None:
+    c.call("GET", "/status")  # fails early with a clear message if watchd isn't running
+    token = c.http.headers["Authorization"].removeprefix("Bearer ")
+    url = f"{c.http.base_url}/ui/#token={token}"
+    if a.print_url:
+        print(url)
+        return
+    subprocess.run(["open", url], check=False)
+    print(f"opened {c.http.base_url}/ui/ in your browser")
+
+
 def cmd_pair(c: Client, a: argparse.Namespace) -> None:
     confirm(
         "Pair this Mac with the watch? Nothing X will need to re-pair afterwards. "
@@ -246,6 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="link state, firmware, battery").set_defaults(func=cmd_status)
+    s = sub.add_parser("ui", help="open the CMF Studio app in your browser (signed in)")
+    s.add_argument("--print-url", action="store_true", help="print the signed-in URL instead of opening it")
+    s.set_defaults(func=cmd_ui)
 
     s = sub.add_parser("notify", help="show a notification on the watch")
     s.add_argument("title")

@@ -20,6 +20,8 @@ from typing import Any
 from cmfkit.watchface import photo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -56,6 +58,7 @@ def create_app(
     faces_dir: Path,
     sync: SyncManager | None = None,
     faces: FaceService | None = None,
+    ui_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -226,5 +229,13 @@ def create_app(
     @app.get("/events", dependencies=[Depends(auth)])
     async def get_events(limit: int = Query(100, ge=1, le=1000), kind: str | None = None) -> list[dict[str, Any]]:
         return store.events(limit, kind)
+
+    if ui_dir is not None and (ui_dir / "index.html").exists():
+        # the built Svelte app: static, no secrets; it gets the token from `cmf ui` (URL fragment)
+        app.mount("/ui", StaticFiles(directory=ui_dir, html=True), name="ui")
+
+        @app.get("/", include_in_schema=False)
+        async def root() -> RedirectResponse:
+            return RedirectResponse("/ui/")
 
     return app

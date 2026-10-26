@@ -89,7 +89,8 @@ async def serve(args: argparse.Namespace) -> None:
             refresh.add_done_callback(lambda t: t.exception() and log.warning("face refresh failed: %r", t.exception()))
 
     queue.on_done.append(after_job)
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces)
+    ui_dir = Path(__file__).resolve().parents[2] / "ui" / "dist"  # built by `cd ui && npm run build`
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:

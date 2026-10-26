@@ -140,3 +140,17 @@ async def test_daily_endpoint(paired_api, watch):
     days = (await client.get("/daily", params={"days": 400}, headers=AUTH)).json()["days"]
     assert any(m.get("hr_max") == 66 for m in days.values())
     assert (await client.post("/reparse", headers=AUTH)).json()["parse_errors"] == 0
+
+
+async def test_ui_is_served_without_token_and_api_still_needs_it(start_link, tmp_path):
+    ui = tmp_path / "dist"
+    ui.mkdir()
+    (ui / "index.html").write_text("<!doctype html><title>CMF Studio</title>")
+    link = start_link()
+    store = Store(":memory:")
+    app = create_app(link, JobQueue(store, link), store, TOKEN, tmp_path, ui_dir=ui)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1") as c:
+        assert (await c.get("/")).headers["location"] == "/ui/"
+        page = await c.get("/ui/")
+        assert page.status_code == 200 and "CMF Studio" in page.text
+        assert (await c.get("/status")).status_code == 401
