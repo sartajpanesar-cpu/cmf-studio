@@ -24,6 +24,7 @@ STATUS = {
         "firmware": None,
         "serial": None,
         "connected_since": None,
+        "last_keepalive_at": None,
         "last_error": "no pairing key",
     },
     "pending_jobs": 0,

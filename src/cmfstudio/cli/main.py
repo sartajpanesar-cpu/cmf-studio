@@ -70,7 +70,8 @@ def cmd_status(c: Client, _a: argparse.Namespace) -> None:
         print("          -> run `cmf pair` (first run, or Nothing X has paired with the watch since)")
     print(f"firmware  {link['firmware'] or '-'}   serial {link['serial'] or '-'}")
     print(f"battery   {link['battery'] if link['battery'] is not None else '-'}%")
-    print(f"connected since {ts(link['connected_since'])}   pending jobs {st['pending_jobs']}")
+    print(f"connected since {ts(link['connected_since'])}   last keepalive {ts(link.get('last_keepalive_at'))}")
+    print(f"pending jobs {st['pending_jobs']}")
     if link["last_error"] and link["state"] != "connected":
         print(f"last error  {link['last_error']}")
 

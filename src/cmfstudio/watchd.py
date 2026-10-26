@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import json
 import logging
+import signal
 import sys
 from pathlib import Path
 
@@ -109,6 +111,8 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    # `kill -USR1 <pid>` dumps every thread's stack to the log (diagnosing hangs, findings 2026-10-25)
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     if args.verbose < 2:
         logging.getLogger("bleak").setLevel(logging.INFO)  # per-advertisement chatter only with -vv
     asyncio.run(serve(args))

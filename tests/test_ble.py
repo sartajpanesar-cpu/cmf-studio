@@ -131,3 +131,19 @@ async def test_battery_comes_from_time_push(paired_link, watch):
     paired_link.time_sync_s = 0.01
     await asyncio.sleep(0.15)
     assert paired_link.battery == 42
+
+
+async def test_keepalive_records_timestamp(paired_link):
+    await asyncio.sleep(0.15)
+    assert paired_link.status()["last_keepalive_at"] is not None
+
+
+async def test_hung_keepalive_is_bounded(paired_link, watch, monkeypatch):
+    # a reply that never comes and a write that never returns must not wedge the supervisor
+    paired_link.op_timeout_s = 0.1
+
+    async def never(*_a, **_k):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(watch, "write", never)
+    await wait_state(paired_link, LinkState.DISCONNECTED, timeout=2)

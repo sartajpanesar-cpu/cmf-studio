@@ -107,6 +107,8 @@ class WatchLink:
         self.backoff_s = backoff_s
         self.needs_pair_retry_s = needs_pair_retry_s
         self.time_sync_s = time_sync_s
+        self.op_timeout_s = 15.0
+        self.last_keepalive_at: float | None = None
         self._last_time_sync = 0.0
 
         self.state = LinkState.DISCONNECTED
@@ -163,6 +165,7 @@ class WatchLink:
             "firmware": self.firmware,
             "serial": self.serial,
             "connected_since": self.connected_since,
+            "last_keepalive_at": self.last_keepalive_at,
             "last_error": self.last_error,
         }
 
@@ -241,16 +244,21 @@ class WatchLink:
                 raise ConnectionError("watch disconnected")
             async with self._lock:
                 assert self._session is not None
-                if time.monotonic() - self._last_time_sync >= self.time_sync_s:
-                    await self._sync_time(self._session)
-                await self._session.firmware_version()  # answered every time, unlike BATTERY
+                # bound the whole exchange (write + reply): nothing in here may hang the supervisor
+                async with asyncio.timeout(self.op_timeout_s):
+                    if time.monotonic() - self._last_time_sync >= self.time_sync_s:
+                        await self._sync_time(self._session)
+                        log.info("heartbeat: connected, battery %s%%", self.battery)
+                    await self._session.firmware_version()  # answered every time, unlike BATTERY
+            self.last_keepalive_at = time.time()
 
     async def _teardown(self) -> None:
         self.connected.clear()
         transport, self._transport, self._session = self._transport, None, None
         if transport is not None:
+            # CoreBluetooth may never confirm a disconnect for a link that died while the Mac slept
             with contextlib.suppress(Exception):
-                await transport.disconnect()
+                await asyncio.wait_for(transport.disconnect(), self.op_timeout_s)
 
     async def _sync_time(self, session: Session) -> None:
         """Set the watch clock; the watch answers with a push burst that includes BATTERY."""
