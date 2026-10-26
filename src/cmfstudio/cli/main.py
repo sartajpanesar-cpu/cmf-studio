@@ -76,6 +76,9 @@ def cmd_status(c: Client, _a: argparse.Namespace) -> None:
     print(f"pending jobs {st['pending_jobs']}")
     if link["last_error"] and link["state"] != "connected":
         print(f"last error  {link['last_error']}")
+        if "TimeoutError" in link["last_error"] or "not found" in link["last_error"]:
+            print("  -> the watch isn't answering: is it connected to the iPhone (Nothing X)? Turn the iPhone's")
+            print("     Bluetooth off; if it then says needs_pair, run `cmf pair`.")
 
 
 def cmd_notify(c: Client, a: argparse.Namespace) -> None:
