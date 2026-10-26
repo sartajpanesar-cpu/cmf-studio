@@ -35,7 +35,13 @@ def sample_values(now: dt.datetime | None = None, metrics: dict[str, Any] | None
         0x73: 0,
     }  # fmt: skip
     steps, kcal, hr, battery = m.get("steps"), m.get("kcal"), m.get("hr"), m.get("battery")
-    for ids, value in (((0x19, 0x26, 0x49), steps), ((0x1C, 0x1E, 0x48), kcal), ((0x1A,), hr), ((0x24, 0x30), battery)):
+    # 0x60 = calories per the spec author's editor (wfweb mock.ts) — the spec marks these ids contested
+    for ids, value in (
+        ((0x19, 0x26, 0x49), steps),
+        ((0x1C, 0x1E, 0x48, 0x60), kcal),
+        ((0x1A,), hr),
+        ((0x24, 0x30), battery),
+    ):
         for i in ids:
             if value is not None:
                 v[i] = int(value)

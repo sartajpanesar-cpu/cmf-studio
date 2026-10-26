@@ -190,3 +190,19 @@ async def test_native_preview_endpoint(native_api):
     r = (await c.post("/native/preview", json={"template": 359, "digit_color": "#00ff88"})).json()
     assert r["template"] == 359 and base64.b64decode(r["preview_png"]).startswith(b"\x89PNG")
     assert [t["id"] for t in (await c.get("/native/templates")).json()] == [362, 359, 288]
+
+
+@needs_templates
+def test_hiding_extras_blanks_their_images_only():
+    dial = NativeDial(template(359))
+    result = asyncio.run(build(NativeSpec(template=359, show_date=False, show_data=False)))
+    out = NativeDial(result.blob)
+    from cmfstudio.render.native_face import widgets
+
+    for (cat, imgs), (_cat2, new_imgs) in zip(widgets(dial), widgets(out), strict=True):
+        alpha_max = max(int(out.decode(out.assets[o])[..., 3].max()) for o in new_imgs)
+        if cat in ("date", "data"):
+            assert alpha_max == 0 or all(dial.assets[o].cf == 4 for o in imgs), f"{cat} widget still visible"
+        elif cat == "time":
+            before = max(int(dial.decode(dial.assets[o])[..., 3].max()) for o in imgs)
+            assert alpha_max == before, "time widgets keep their pixels (AM/PM is blank in this template)"

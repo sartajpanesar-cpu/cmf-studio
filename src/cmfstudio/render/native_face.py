@@ -58,9 +58,11 @@ class NativeSpec(BaseModel):
     font: FontRef | None = Field(None, description="None keeps the template's digits")
     weight: int = Field(400, ge=100, le=900)
     digit_color: Color | None = Field(None, description="main-screen digits; None keeps the template colour")
-    background: Color | None = Field(None, description="None keeps the template background")
+    background: Color | None = Field("#000000", description="None keeps the template background (placeholder art)")
     background_bottom: Color | None = Field(None, description="set for a top→bottom gradient")
     background_face_id: int | None = Field(None, description="a saved Studio design as the background picture")
+    show_date: bool = Field(True, description="the template's date / weekday widgets")
+    show_data: bool = Field(False, description="steps, calories, heart rate, battery… (template placeholders)")
 
 
 @dataclass
@@ -112,9 +114,15 @@ async def build(
             rgba[..., 3] = alpha
             dial.replace(frame, rgba)
 
+    hidden = {"date"} if not spec.show_date else set()
+    hidden |= {"data"} if not spec.show_data else set()
+    if hidden:
+        _hide(dial, hidden)
+
     bg_rgba = _background(spec, background_image)
     if bg_rgba is not None:
-        if not dial.backgrounds():
+        plain_black = background_image is None and spec.background == "#000000" and not spec.background_bottom
+        if not dial.backgrounds() and not plain_black:
             warnings.append(f"{TEMPLATES[spec.template][0]} has no background image (the watch draws black behind it)")
         for bg in dial.backgrounds():
             dial.replace(bg, bg_rgba)
@@ -177,6 +185,73 @@ def fit_digits(glyphs: list[np.ndarray], originals: list[np.ndarray]) -> list[np
         _paste(canvas, small, int(round((b[0] + b[2]) / 2 - gw / 2)), bottom - gh)
         out.append(canvas)
     return out
+
+
+# -- which template widgets show ----------------------------------------------------------------------------------
+
+TIME_IDS = set(range(0x01, 0x14)) | {0x70, 0x71, 0x72}  # hours, minutes, seconds, AM/PM, hand angles (spec §16)
+DATE_IDS = {0x15, 0x16, 0x17, 0x18}
+
+
+def widget_category(source: int, condition_ids: set[int]) -> str:
+    """'time' (always kept), 'date', 'data', or 'static' (unbound decoration: kept)."""
+    ids = ({source} | condition_ids) - {0}
+    if not ids:
+        return "static"
+    if ids & TIME_IDS:
+        return "time"
+    if ids <= DATE_IDS:
+        return "date"
+    return "data"
+
+
+def widgets(dial: NativeDial) -> list[tuple[str, set[int]]]:
+    """(category, image offsets) for every drawable node on both screens."""
+    b, out = dial.b, []
+    tails = {t.at: t for t in dial.tails}
+
+    def node(body: int, n: int) -> None:
+        src, conds, imgs = 0, set(), set()
+        off = body
+        while off < body + n:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag == 0x01:
+                src = b[cb + 13]
+                tail = tails.get(cb + 0x12)
+                if tail:
+                    imgs = {a.off for a in dial.chain(tail)}
+            elif tag == 0x02:
+                conds = {b[cb + 1 + 5 * k] for k in range(b[cb])}
+            off = cb + ln
+        if imgs:
+            out.append((widget_category(src, conds), imgs))
+
+    def walk(off: int, end: int) -> None:
+        while off < end:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag in (0x20, 0x21, 0x22, 0x68):
+                walk(cb, cb + ln)
+            elif tag in (0x30, 0x60, 0x70, 0x80, 0x81, 0x85):
+                node(cb, ln)
+            off = cb + ln
+
+    walk(36, dial.first_asset)
+    return out
+
+
+def _hide(dial: NativeDial, categories: set[str]) -> None:
+    """Blank the images of widgets in ``categories`` (unless a shown widget uses the same image)."""
+    hide, keep = set(), set()
+    for category, imgs in widgets(dial):
+        (hide if category in categories else keep).update(imgs)
+    for off in hide - keep:
+        a = dial.assets[off]
+        rgba = np.zeros((a.h, a.w, 4), dtype=np.uint8)
+        if a.cf == 4:
+            rgba[..., 3] = 255  # opaque format: black
+        dial.replace(a, rgba)
 
 
 # -- background -----------------------------------------------------------------------------------------------------

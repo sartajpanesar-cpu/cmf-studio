@@ -9,6 +9,7 @@
   type Spec = {
     name: string; template: number; font: Font | null; weight: number; digit_color: string | null;
     background: string | null; background_bottom: string | null; background_face_id: number | null;
+    show_date: boolean; show_data: boolean;
   };
   type Dial = { id: number; name: string; active: boolean; kind: "stock" | "custom" | "native" };
 
@@ -35,7 +36,8 @@
 
   const blank = (): Spec => ({
     name: "my-native-face", template: 362, font: { family: "Orbitron", source: "google", weights: [600] },
-    weight: 600, digit_color: "#e8c66a", background: null, background_bottom: null, background_face_id: null,
+    weight: 600, digit_color: "#e8c66a", background: "#000000", background_bottom: null, background_face_id: null,
+    show_date: true, show_data: false,
   });
 
   let templates = $state<Template[]>([]);
@@ -221,7 +223,7 @@
       <p class="muted small">{template.name} draws black behind the time (it has no background image).</p>
     {:else}
       <div class="seg">
-        {#each [["template", "Template"], ["colour", "Colour"], ["gradient", "Gradient"], ["design", "Studio design"]] as [m, label]}
+        {#each [["colour", "Colour"], ["gradient", "Gradient"], ["design", "Studio design"], ["template", "Template art"]] as [m, label]}
           <button class:on={bgMode === m} onclick={() => setBg(m)} disabled={m === "design" && !studioFaces.length}>{label}</button>
         {/each}
       </div>
@@ -236,6 +238,11 @@
         </select>
       {/if}
     {/if}
+
+    <h3>Show</h3>
+    <label class="check"><input type="checkbox" bind:checked={spec.show_date} /> Date and weekday</label>
+    <label class="check"><input type="checkbox" bind:checked={spec.show_data} /> Data widgets (steps, calories, heart rate, battery…)</label>
+    <p class="muted tiny">Off hides them on the watch too. The templates' data widgets are placeholders whose meaning isn't fully verified.</p>
 
     <h3>Name</h3>
     <input bind:value={spec.name} maxlength="60" />
@@ -309,6 +316,7 @@
   .tpl.on, .seg button.on, .small.on { border-color: var(--accent); }
   .seg { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
   .seg button { flex: 1; font-size: 12px; padding: 4px 6px; background: none; }
+  .check { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
   .gallery { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px 8px; }
   .group { margin: 8px 0 4px; }
   .chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 4px; }
