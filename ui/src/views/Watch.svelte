@@ -83,7 +83,7 @@
 </div>
 
 <style>
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; }
   .wide { grid-column: 1 / -1; overflow-x: auto; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; margin: 12px 0; }
   dt { color: var(--muted); }

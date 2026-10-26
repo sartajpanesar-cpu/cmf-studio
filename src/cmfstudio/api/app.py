@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import datetime as dt
 import hashlib
 import io
 import json
@@ -30,7 +31,7 @@ from ..core.jobs import JobQueue
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
 from ..store.db import Job, Store
-from ..sync import daily
+from ..sync import daily, health
 from ..sync.manager import SyncManager
 
 # How long a synchronous call waits for its job before returning it still queued.
@@ -207,6 +208,23 @@ def create_app(
     @app.get("/daily", dependencies=[Depends(auth)])
     async def get_daily(days: int = Query(7, ge=1, le=3660)) -> dict[str, Any]:
         return {"days": daily.read(store, days)}
+
+    @app.get("/health/series", dependencies=[Depends(auth)])
+    async def get_health_series(days: int = Query(30, ge=1, le=3660)) -> dict[str, Any]:
+        return {"days": health.series(store, days)}
+
+    @app.get("/health/baselines", dependencies=[Depends(auth)])
+    async def get_health_baselines(window: int = Query(28, ge=7, le=365)) -> dict[str, Any]:
+        return health.baselines(store, window)
+
+    @app.get("/health/intraday", dependencies=[Depends(auth)])
+    async def get_health_intraday(date: str | None = None) -> dict[str, Any]:
+        day = date or dt.date.today().isoformat()
+        try:
+            dt.date.fromisoformat(day)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "date must be YYYY-MM-DD") from None
+        return health.intraday(store, day)
 
     @app.post("/reparse", dependencies=[Depends(auth)])
     async def post_reparse() -> dict[str, Any]:

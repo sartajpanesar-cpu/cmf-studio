@@ -253,3 +253,62 @@ async def test_reparse_repairs_samples_from_raw(sync, paired_link, day):
     assert {r[0] for r in store.db.execute("SELECT parser_version FROM raw_frames WHERE opcode != '0057:0001'")} == {
         p.PARSER_VERSION
     }
+
+
+# -- health views ----------------------------------------------------------------
+
+
+def _day_ts(days_ago: int, hour: int = 12) -> int:
+    import datetime as dt
+
+    d = dt.date.today() - dt.timedelta(days=days_ago)
+    return int(dt.datetime.combine(d, dt.time(hour)).timestamp())
+
+
+def test_baseline_needs_enough_history_then_flags():
+    from cmfstudio.sync import daily, health
+
+    store = Store(":memory:")
+    for ago, rhr in [(6, 60), (5, 61), (4, 59), (3, 60), (2, 62), (1, 60)]:
+        store.upsert_samples([p.Sample("hr_resting", _day_ts(ago), rhr)], None)
+    store.upsert_samples([p.Sample("hr_resting", _day_ts(0), 75)], None)
+    daily.rebuild(store, _day_ts(7))
+    b = health.baselines(store)["hr_resting"]
+    assert b["n"] == 6 and "flag" not in b  # 6 < MIN_DAYS: no judgement yet
+    store.upsert_samples([p.Sample("hr_resting", _day_ts(7), 61)], None)
+    daily.rebuild(store, _day_ts(8))
+    b = health.baselines(store)["hr_resting"]
+    assert b["n"] == 7 and b["baseline"] == 60 and b["z"] > 2.5
+    assert b["flag"] == "Resting heart rate is unusually high for you today"
+
+
+def test_low_metric_not_flagged_when_high():
+    from cmfstudio.sync import daily, health
+
+    store = Store(":memory:")
+    for ago in range(1, 9):
+        store.upsert_samples([p.Sample("steps_cum", _day_ts(ago, 20), 5000 + ago * 10)], None)
+    store.upsert_samples([p.Sample("steps_cum", _day_ts(0, 20), 40000)], None)  # a big day is fine
+    daily.rebuild(store, _day_ts(9))
+    assert "flag" not in health.baselines(store)["steps"]
+
+
+def test_intraday_hourly_steps_from_cumulative():
+    from cmfstudio.sync import health
+
+    store = Store(":memory:")
+    store.upsert_samples(
+        [p.Sample("steps_cum", _day_ts(0, h), v) for h, v in [(1, 0), (9, 300), (10, 1300), (11, 1350)]]
+        + [p.Sample("hr", _day_ts(0, 9), 70)],
+        None,
+    )
+    d = health.intraday(store, __import__("datetime").date.today().isoformat())
+    assert [v for _, v in d["steps"]] == [0, 300, 1000, 50]
+    assert d["hr"] == [(_day_ts(0, 9), 70.0)]
+
+
+def test_series_has_every_day():
+    from cmfstudio.sync import health
+
+    rows = health.series(Store(":memory:"), 7)
+    assert len(rows) == 7 and all(set(r) == {"date"} for r in rows)

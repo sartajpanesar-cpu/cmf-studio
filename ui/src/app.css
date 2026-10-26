@@ -12,6 +12,14 @@
   --warn: #e3a84b;
   --bad: #e5675e;
   --radius: 10px;
+  /* charts: validated categorical steps for this (dark) surface — dataviz palette, slots 1-4 */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --chart-grid: #26262a;
+  --chart-axis: #3a3a3f;
+  --status-serious: #ec835a;
   --font: -apple-system, "Helvetica Neue", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   color-scheme: dark;
@@ -27,6 +35,12 @@
     --faint: #8c8c94;
     --accent: #a07a12;
     --accent-ink: #ffffff;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --chart-grid: #ebeae6;
+    --chart-axis: #c3c2b7;
     color-scheme: light;
   }
 }
