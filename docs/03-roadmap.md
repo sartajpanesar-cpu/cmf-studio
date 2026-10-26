@@ -59,15 +59,24 @@ See `06-studio-design-pipeline.md`.
 - [x] Document what the face format supports natively (live time digits? which fields?) vs baked-in (docs/06 table)
 
 ## Phase 4 — Studio + Health UI · 2–3 weekends
-**Status 2026-10-26 (where we left off):** branch `phase-4`. App served by watchd (`uv run cmf ui`): Health, Studio, Watch.
-Claude features built and tested with a fake client. **To close Phase 4:** owner runs `uv run cmf set-key`, then one live
-"Design it with Claude" and one weekly recap; check results; then merge and start Phase 5. Widgets editor deferred.
+**Status: DONE 2026-10-26** (owner: "we can move on"). App served by watchd (`uv run cmf ui`): Health (trends, baselines,
+anomaly flags), Studio (live preview ~80 ms, drag/snap/centre, measured firmware clock overlay, Claude design + edit),
+Watch. Notes: weekly Claude recap built and tested with a fake client but not run live yet; widgets editor deferred.
 
 - [x] Svelte app served by watchd (`cmf ui`; token via URL fragment)
 - [x] Studio: layers (text/image/shape/data), font picker, color, live round preview, save/install
-- [ ] "Describe a face" → Claude generates HTML/CSS → preview → install (built: Claude returns a FaceSpec, not raw HTML — validated, previewed, never auto-installed; awaiting an API key for a live run)
-- [ ] Health: trends, baselines, anomaly flags, weekly Claude summary (aggregates only) (built; weekly summary awaiting an API key for a live run)
+- [x] "Describe a face" → Claude generates HTML/CSS → preview → install (Claude returns a design converted to a validated FaceSpec, not raw HTML; edits the current design; verified live 2026-10-26)
+- [x] Health: trends, baselines, anomaly flags, weekly Claude summary (aggregates only) (weekly recap: tested with a fake client; first live run still to do)
 - [ ] Widgets editor (port Gadgetbridge widget setup) (**deferred** by owner 2026-10-26: Gadgetbridge has no CMF widget code to port; only the QUICK_CARD opcode FFFF 906D/A06D is known. Revisit with new evidence)
+
+## Backlog (owner priorities)
+1. **Custom time font** (owner: "I really want to change the time font"). Photo dials can't: the clock is one of 5
+   firmware styles (findings 2026-10-26). Path: structured dials — re-skin a store dial's digit sprite atlas
+   (`img_number`, spec §11.6/§11.10) with digits rendered in any font; live time, up to 7 slots. Needs a container
+   editor (two header CRC32s, never grow the file, fresh install) and store dial binaries (spec repo
+   `wfweb/public/templates` has 5). Firmware font replacement is Tier 3 — not this.
+2. Widgets / quick-card editor (deferred: no Gadgetbridge code; only opcode FFFF 906D known).
+3. Measure on-watch buffer length (Phase 2 deferred).
 
 ## Phase 5 — MCP + automations · ~1 weekend
 - [ ] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code

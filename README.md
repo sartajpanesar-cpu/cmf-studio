@@ -3,7 +3,7 @@
 Mac-side companion, design studio, and health-analytics stack for the **CMF Watch Pro 2** (model D398, Actions ATS3089C, Zephyr RTOS + LVGL).
 Goal: the MacBook replaces the phone app — sync health data, design faces/fonts/graphics, push widgets and alerts, and drive the watch from Claude via MCP.
 
-> Status: Phases 0–3 done (watchd syncs health data hourly; custom faces from JSON specs refresh after each sync), 2026-10-26. Next: Phase 4, Studio + Health UI. See `docs/03-roadmap.md`.
+> Status: Phases 0–4 done (watchd + health sync + faces + the Studio/Health app: `uv run cmf ui`), 2026-10-26. Next: Phase 5, MCP + automations. See `docs/03-roadmap.md`.
 
 ## Quick start (after setup below)
 ```bash
