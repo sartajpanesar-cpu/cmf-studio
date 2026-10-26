@@ -36,3 +36,15 @@ async def test_nudge_checks_link_immediately(paired_link, watch):
     watch.up = False  # silent drop: no disconnect callback, like a sleeping Mac
     paired_link.nudge()
     await wait_state(paired_link, LinkState.DISCONNECTED, timeout=1)
+
+
+async def test_bluetooth_off_polls_fast_and_reconnects(paired_link, watch):
+    # the first retry after a drop is quick; without the fast poll, the next one would wait 30 s
+    paired_link.backoff_s = (0.01, 30.0)
+    paired_link.bt_off_poll_s = 0.05
+    watch.bt_off = True
+    watch.drop()
+    await wait_state(paired_link, LinkState.DISCONNECTED)
+    await asyncio.sleep(0.2)  # several fast polls while off
+    watch.bt_off = False
+    await wait_state(paired_link, LinkState.CONNECTED, timeout=1)

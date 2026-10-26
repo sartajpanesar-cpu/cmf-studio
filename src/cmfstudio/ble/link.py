@@ -20,6 +20,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from bleak.exc import BleakBluetoothNotAvailableError
 from cmfkit.protocol import opcodes as ops
 from cmfkit.protocol import payloads as pl
 from cmfkit.protocol.frame import FrameError, Message
@@ -108,6 +109,7 @@ class WatchLink:
         self.needs_pair_retry_s = needs_pair_retry_s
         self.time_sync_s = time_sync_s
         self.op_timeout_s = 15.0
+        self.bt_off_poll_s = 2.0
         self.last_keepalive_at: float | None = None
         self._last_time_sync = 0.0
 
@@ -187,6 +189,16 @@ class WatchLink:
             except (NotPairedError, StaleKeyError) as exc:
                 self._set_state(LinkState.NEEDS_PAIR, str(exc))
                 delay = self.needs_pair_retry_s
+            except BleakBluetoothNotAvailableError as exc:
+                # Mac Bluetooth off: attempts fail in ~0.1 s, so poll quickly and reconnect as soon as it's back
+                # instead of climbing the backoff ladder (findings 2026-10-25, watchd-C.log)
+                if self._stopping:
+                    break
+                if self.state is not LinkState.DISCONNECTED:
+                    log.warning("Bluetooth unavailable: %r", exc)
+                self._set_state(LinkState.DISCONNECTED, repr(exc))
+                self._attempt = 0
+                delay = self.bt_off_poll_s
             except Exception as exc:  # BLE errors come in many types; all mean "try again later"
                 if self._stopping:
                     break

@@ -20,7 +20,7 @@ Each phase has acceptance criteria (AC). Don't start a phase until the previous 
 ## Phase 1 — watchd skeleton · ~1 weekend
 **Status: DONE 2026-10-25.** watchd runs as a launchd agent, holds the link (FIRMWARE_VERSION_GET keepalive, TIME every 15 min),
 reconnects after Bluetooth off/on and after sleep, and serves the CLI. 50 sim tests. Follow-ups carried into Phase 2:
-nudge the link on Bluetooth power-on; push to GitHub so CI runs. Notes: the watch keeps one pairing — if Nothing X connects,
+~~nudge the link on Bluetooth power-on~~ (done: 2 s polling while Bluetooth is off); push to GitHub so CI runs. Notes: the watch keeps one pairing — if Nothing X connects,
 run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 
 - [x] `src/cmfstudio` package, uv project, ruff + pytest + CI (GitHub Actions, sim-only tests) (workflow written; no GitHub remote yet, so only run locally)

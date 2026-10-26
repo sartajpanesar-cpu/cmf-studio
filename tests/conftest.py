@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from bleak.exc import BleakBluetoothNotAvailableError, BleakBluetoothNotAvailableReason
 from cmfkit.protocol import opcodes as ops
 from cmfkit.transport.sim import SimWatch
 
@@ -30,6 +31,7 @@ class FlakySim(SimWatch):
         self.up = False
         self.connects = 0
         self.reachable = True
+        self.bt_off = False
         self._on_disconnect: Callable[[], None] | None = None
         # health sync emulation (docs/protocol-sync.md): frames sent after ACTIVITY_FETCH_2
         self.health_frames: list[tuple] = []
@@ -41,6 +43,10 @@ class FlakySim(SimWatch):
         self._on_disconnect = handler
 
     async def connect(self) -> None:
+        if self.bt_off:
+            raise BleakBluetoothNotAvailableError(
+                "Bluetooth device is turned off", BleakBluetoothNotAvailableReason.POWERED_OFF
+            )
         if not self.reachable:
             raise OSError("watch not found")
         self.connects += 1
