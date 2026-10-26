@@ -12,6 +12,27 @@
   };
   type Dial = { id: number; name: string; active: boolean; kind: "stock" | "custom" | "native" };
 
+  // Fonts that read well as big digits, by style. [family, weight]
+  const PRESETS: [string, [string, number][]][] = [
+    ["Digital", [["Orbitron", 600], ["Share Tech Mono", 400], ["Audiowide", 400], ["Michroma", 400], ["Chakra Petch", 600],
+      ["Rajdhani", 600], ["Oxanium", 600], ["Major Mono Display", 400], ["VT323", 400], ["Silkscreen", 400]]],
+    ["Clean", [["Inter", 600], ["Manrope", 700], ["Outfit", 600], ["Sora", 600], ["Space Grotesk", 600], ["Lexend", 500],
+      ["Barlow Condensed", 600], ["Oswald", 500], ["Bebas Neue", 400], ["Anton", 400], ["Big Shoulders Display", 700]]],
+    ["Elegant", [["Playfair Display", 700], ["DM Serif Display", 400], ["Cormorant Garamond", 600], ["Abril Fatface", 400], ["Fraunces", 600]]],
+    ["Playful", [["Nunito", 800], ["Fredoka", 600], ["Righteous", 400], ["Bungee", 400], ["Monoton", 400], ["Pacifico", 400], ["Caveat", 600]]],
+    ["Mono", [["JetBrains Mono", 600], ["IBM Plex Mono", 600], ["Space Mono", 700], ["Roboto Mono", 600]]],
+  ];
+  // only the digits and colon of each font, so the gallery stays light
+  const PRESET_CSS =
+    "https://fonts.googleapis.com/css2?" +
+    PRESETS.flatMap(([, fs]) => fs).map(([f, w]) => `family=${f.replace(/ /g, "+")}:wght@${w}`).join("&") +
+    "&display=swap&text=" + encodeURIComponent("0123456789:");
+
+  function pick(family: string, weight: number) {
+    spec.weight = weight;
+    spec.font = { family, source: "google", weights: [weight] };
+  }
+
   const blank = (): Spec => ({
     name: "my-native-face", template: 362, font: { family: "Orbitron", source: "google", weights: [600] },
     weight: 600, digit_color: "#e8c66a", background: null, background_bottom: null, background_face_id: null,
@@ -144,6 +165,8 @@
   }
 </script>
 
+<svelte:head><link rel="stylesheet" href={PRESET_CSS} /></svelte:head>
+
 <div class="native">
   <section class="card controls">
     <h2>Native face</h2>
@@ -159,6 +182,20 @@
     </div>
 
     <h3>Font</h3>
+    <div class="gallery">
+      {#each PRESETS as [group, fonts]}
+        <p class="muted tiny group">{group}</p>
+        <div class="chips">
+          {#each fonts as [family, weight]}
+            <button class="chip" class:on={spec.font?.family === family} title={family} onclick={() => pick(family, weight)}>
+              <span style="font-family:'{family}',sans-serif;font-weight:{weight}">10:08</span><small>{family}</small>
+            </button>
+          {/each}
+        </div>
+      {/each}
+      <button class="small" class:on={spec.font == null} onclick={() => (spec.font = null)}>Template digits</button>
+    </div>
+    <p class="muted tiny">{spec.font ? `${spec.font.family} · ${spec.weight}` : "Template digits"} — or type any Google font:</p>
     <div class="row">
       <input list="native-gfonts" placeholder="Template digits" value={spec.font?.source === "google" ? spec.font.family : ""}
         onchange={(e) => setFont((e.currentTarget as HTMLInputElement).value.trim())} />
@@ -272,6 +309,13 @@
   .tpl.on, .seg button.on, .small.on { border-color: var(--accent); }
   .seg { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
   .seg button { flex: 1; font-size: 12px; padding: 4px 6px; background: none; }
+  .gallery { max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px 8px; }
+  .group { margin: 8px 0 4px; }
+  .chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 4px; }
+  .chip { display: grid; padding: 4px 2px; background: none; line-height: 1.2; white-space: nowrap; overflow: hidden; }
+  .chip span { font-size: 22px; }
+  .chip small { font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
   .file { display: grid; gap: 3px; color: var(--muted); font-size: 12px; margin-top: 8px; }
   .saved { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
   .saved li { display: flex; gap: 8px; align-items: center; }
