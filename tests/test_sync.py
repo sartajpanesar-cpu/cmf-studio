@@ -192,3 +192,64 @@ async def test_scheduler_skips_when_sync_pending(paired_link):
     sched.kick()
     sched.kick()
     assert len([j for j in store.open_jobs() if j.kind == "sync"]) == 1
+
+
+# -- daily totals and reparse -------------------------------------------------
+
+
+def local_ts(y, mo, d, h, mi=0):
+    import datetime as dt
+
+    return int(dt.datetime(y, mo, d, h, mi).timestamp())
+
+
+def test_daily_takes_max_cumulative_per_local_day():
+    from cmfstudio.sync import daily
+
+    store = Store(":memory:")
+    store.upsert_samples(
+        [
+            p.Sample("steps_cum", local_ts(2026, 10, 24, 22), 4000),
+            p.Sample("steps_cum", local_ts(2026, 10, 24, 23), 4500),
+            p.Sample("steps_cum", local_ts(2026, 10, 25, 1), 20),  # reset at local midnight
+            p.Sample("steps_cum", local_ts(2026, 10, 25, 9), 900),
+            p.Sample("hr", local_ts(2026, 10, 25, 9), 60),
+            p.Sample("hr", local_ts(2026, 10, 25, 10), 90),
+            p.Sample("hr_resting", local_ts(2026, 10, 25, 9), 63),
+            p.Sample("hr_resting", local_ts(2026, 10, 25, 11), 61),
+        ],
+        None,
+    )
+    store.upsert_sleep(
+        p.SleepSession(local_ts(2026, 10, 24, 23), local_ts(2026, 10, 25, 7), {"deep": 3600, "core": 18000}, 0), None
+    )
+    assert daily.compute(store, "2026-10-24")["steps"] == 4500
+    d = daily.compute(store, "2026-10-25")
+    assert d["steps"] == 900
+    assert (d["hr_min"], d["hr_max"], d["hr_avg"]) == (60, 90, 75)
+    assert d["hr_resting"] == 61  # latest
+    assert d["sleep_s"] == 8 * 3600 and d["sleep_deep_s"] == 3600  # attributed to the wake-up day
+    assert "sleep_s" not in daily.compute(store, "2026-10-24")
+
+
+async def test_sync_rebuilds_daily(sync, paired_link, day):
+    from cmfstudio.sync import daily
+
+    mgr, store = sync
+    await mgr.fetch(paired_link)
+    by_day = daily.read(store, days=400)
+    totals = by_day[daily.local_day(T0)]
+    assert totals["steps"] == 190 and totals["hr_max"] == 72
+
+
+async def test_reparse_repairs_samples_from_raw(sync, paired_link, day):
+    mgr, store = sync
+    await mgr.fetch(paired_link)
+    store.db.execute("UPDATE samples SET value = -1 WHERE metric = 'hr'")
+    store.db.execute("UPDATE raw_frames SET parser_version = 0")
+    res = mgr.reparse()
+    assert store.samples("hr") == [(T0, 61.0), (T0 + 600, 72.0)]
+    assert res["parse_errors"] == 0 and res["days_rebuilt"] > 0
+    assert {r[0] for r in store.db.execute("SELECT parser_version FROM raw_frames WHERE opcode != '0057:0001'")} == {
+        p.PARSER_VERSION
+    }

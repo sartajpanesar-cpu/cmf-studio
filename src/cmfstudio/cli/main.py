@@ -120,6 +120,43 @@ def cmd_samples(c: Client, a: argparse.Namespace) -> None:
         print(f"{dts(t)}  {v:g}")
 
 
+def cmd_days(c: Client, a: argparse.Namespace) -> None:
+    days = c.call("GET", "/daily", params={"days": a.days})["days"]
+    if not days:
+        print("no daily data yet; run `cmf sync`")
+        return
+    cols = [
+        ("steps", "steps", "{:.0f}"),
+        ("calories", "cal*", "{:.0f}"),
+        ("distance_m", "km", "{:.2f}"),
+        ("hr_resting", "rest", "{:.0f}"),
+        ("hr_avg", "hr avg", "{:.0f}"),
+        ("hr_max", "hr max", "{:.0f}"),
+        ("spo2_avg", "spo2", "{:.0f}"),
+        ("stress_avg", "stress", "{:.0f}"),
+        ("sleep_s", "sleep", "{}"),
+    ]
+    print("date        " + "".join(f"{h:>8}" for _, h, _ in cols))
+    for day, m in days.items():
+        cells = []
+        for key, _, fmt in cols:
+            v = m.get(key)
+            if v is None:
+                cells.append("-")
+            elif key == "distance_m":
+                cells.append(fmt.format(v / 1000))
+            elif key == "sleep_s":
+                cells.append(f"{int(v // 3600)}h{int(v % 3600 // 60):02d}")
+            else:
+                cells.append(fmt.format(v))
+        print(f"{day}  " + "".join(f"{x:>8}" for x in cells))
+    print("* calories in the watch's unit (looks like kcal; unconfirmed)")
+
+
+def cmd_reparse(c: Client, _a: argparse.Namespace) -> None:
+    print(json.dumps(c.call("POST", "/reparse"), indent=2))
+
+
 def dts(t: float | None) -> str:
     return dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "-"
 
@@ -174,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("metric", nargs="?", help="e.g. hr, steps_cum, spo2, stress, hr_resting")
     s.add_argument("--hours", type=float, default=24)
     s.set_defaults(func=cmd_samples)
+
+    s = sub.add_parser("days", help="daily totals (steps, calories, HR, sleep)")
+    s.add_argument("days", nargs="?", type=int, default=7)
+    s.set_defaults(func=cmd_days)
+    sub.add_parser("today", help="today's totals").set_defaults(func=cmd_days, days=1)
+    sub.add_parser("reparse", help="re-run parsers over stored raw frames").set_defaults(func=cmd_reparse)
 
     s = sub.add_parser("jobs", help="recent jobs")
     s.add_argument("--limit", type=int, default=20)

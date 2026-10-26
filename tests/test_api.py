@@ -34,7 +34,7 @@ async def api(start_link, tmp_path):
     sync.attach(link)
     queue = JobQueue(store, link, retry_s=0.01, handlers={"sync": lambda lk, _a: sync.fetch(lk)})
     queue.start()
-    app = create_app(link, queue, store, TOKEN, tmp_path / "faces")
+    app = create_app(link, queue, store, TOKEN, tmp_path / "faces", sync)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
         yield client, link, store
@@ -131,3 +131,12 @@ async def test_sync_endpoint_and_samples(paired_api, watch):
     assert r["samples"] == [[1_761_400_000, 66.0]]
     summ = (await client.get("/samples/summary", headers=AUTH)).json()
     assert summ["metrics"]["hr"]["count"] == 1 and summ["raw_frames"] == 1
+
+
+async def test_daily_endpoint(paired_api, watch):
+    client, *_ = paired_api
+    watch.health_frames = [(p.HEART_RATE, struct.pack("<II", 1_761_400_000, 66))]
+    await client.post("/sync", headers=AUTH)
+    days = (await client.get("/daily", params={"days": 400}, headers=AUTH)).json()["days"]
+    assert any(m.get("hr_max") == 66 for m in days.values())
+    assert (await client.post("/reparse", headers=AUTH)).json()["parse_errors"] == 0

@@ -25,6 +25,8 @@ from pydantic import BaseModel, Field
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core.jobs import JobQueue
 from ..store.db import Job, Store
+from ..sync import daily
+from ..sync.manager import SyncManager
 
 # How long a synchronous call waits for its job before returning it still queued.
 WAIT_S = 20.0
@@ -39,7 +41,9 @@ class NotifyIn(BaseModel):
     wait: bool = True
 
 
-def create_app(link: WatchLink, queue: JobQueue, store: Store, token: str, faces_dir: Path) -> FastAPI:
+def create_app(
+    link: WatchLink, queue: JobQueue, store: Store, token: str, faces_dir: Path, sync: SyncManager | None = None
+) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -141,6 +145,17 @@ def create_app(link: WatchLink, queue: JobQueue, store: Store, token: str, faces
             "sleep_sessions": {"count": sleep[0], "first": sleep[1], "last": sleep[2]},
             "raw_frames": store.db.execute("SELECT count(*) FROM raw_frames").fetchone()[0],
         }
+
+    @app.get("/daily", dependencies=[Depends(auth)])
+    async def get_daily(days: int = Query(7, ge=1, le=3660)) -> dict[str, Any]:
+        return {"days": daily.read(store, days)}
+
+    @app.post("/reparse", dependencies=[Depends(auth)])
+    async def post_reparse() -> dict[str, Any]:
+        """Re-run parsers over stored raw frames and rebuild daily totals. Doesn't touch the watch."""
+        if sync is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "sync not configured")
+        return sync.reparse()
 
     @app.get("/jobs", dependencies=[Depends(auth)])
     async def get_jobs(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:

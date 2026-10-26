@@ -20,6 +20,7 @@ from cmfkit.protocol.frame import Message
 
 from ..ble.link import WatchLink
 from ..store.db import Store
+from . import daily
 from . import parsers as p
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ class FetchRun:
     new_samples: Counter = field(default_factory=Counter)
     sleep_sessions: int = 0
     parse_errors: int = 0
+    min_ts: int | None = None
+
+    def saw(self, ts: int) -> None:
+        self.min_ts = ts if self.min_ts is None else min(self.min_ts, ts)
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -88,9 +93,14 @@ class SyncManager:
         return False
 
     def ingest(self, op: ops.Op, payload: bytes, run: FetchRun | None = None) -> None:
+        parsed = op not in p.RAW_ONLY
+        # canonical "cmd1:cmd2" hex, so reparse() can always decode it
+        frame_id = self.store.add_raw_frame(str(op), payload, p.PARSER_VERSION if parsed else None)  # raw first
+        self._parse(op, payload, frame_id, run)
+
+    def _parse(self, op: ops.Op, payload: bytes, frame_id: int, run: FetchRun | None) -> None:
         name = ops.name_of(op) if op in ops.NAMES else str(op)
         parsed = op not in p.RAW_ONLY
-        frame_id = self.store.add_raw_frame(name, payload, p.PARSER_VERSION if parsed else None)  # raw first
         if run:
             run.frames[name] += 1
             run.last_activity = time.monotonic()
@@ -98,9 +108,11 @@ class SyncManager:
             return
         try:
             if op == p.SLEEP_DATA:
-                self.store.upsert_sleep(p.sleep(payload), frame_id)
+                session = p.sleep(payload)
+                self.store.upsert_sleep(session, frame_id)
                 if run:
                     run.sleep_sessions += 1
+                    run.saw(session.end_ts)
                 return
             by_metric: dict[str, list[p.Sample]] = {}
             for sample in p.SAMPLE_PARSERS[op](payload):
@@ -109,6 +121,7 @@ class SyncManager:
                 new = self.store.upsert_samples(samples, frame_id)
                 if run:
                     run.new_samples[metric] += new
+                    run.saw(min(s.ts for s in samples))
         except p.ParseError as exc:
             log.warning("parse failed (raw frame %d kept): %s", frame_id, exc)
             self.store.add_event("parse_error", {"frame_id": frame_id, "op": str(op), "error": str(exc)})
@@ -139,9 +152,27 @@ class SyncManager:
                             raise TimeoutError(f"sync stalled: no data for {self.idle_s:.0f} s") from None
                         if now - run.started > self.total_s:
                             raise TimeoutError(f"sync exceeded {self.total_s:.0f} s") from None
+            if run.min_ts is not None:
+                daily.rebuild(self.store, run.min_ts)
             result = run.summary()
             self.store.add_event("sync", result)
             log.info("sync done: %s", result)
             return result
         finally:
             self._run = None
+
+    def reparse(self) -> dict[str, Any]:
+        """Re-run the current parsers over every stored raw frame (after a parser fix), then rebuild `daily`."""
+        run = FetchRun()
+        rows = self.store.db.execute("SELECT id, opcode, payload_hex FROM raw_frames ORDER BY id").fetchall()
+        for row in rows:
+            cmd1, cmd2 = (int(x, 16) for x in row["opcode"].split(":"))
+            op = ops.Op(cmd1, cmd2)
+            if op in p.RAW_ONLY or op not in p.DATA_OPS:
+                continue
+            self._parse(op, bytes.fromhex(row["payload_hex"]), row["id"], run)
+            self.store.db.execute(
+                "UPDATE raw_frames SET parser_version = ? WHERE id = ?", (p.PARSER_VERSION, row["id"])
+            )
+        days = daily.rebuild(self.store)
+        return {**run.summary(), "days_rebuilt": len(days)}

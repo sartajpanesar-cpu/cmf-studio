@@ -80,7 +80,7 @@ async def serve(args: argparse.Namespace) -> None:
     sync = SyncManager(store)
     sync.attach(link)
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces")
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:
