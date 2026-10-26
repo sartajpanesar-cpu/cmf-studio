@@ -24,6 +24,7 @@ from .ble.link import WatchLink
 from .core.jobs import JobQueue
 from .core.power import WakeWatcher
 from .core.scheduler import SyncScheduler
+from .render.service import FaceService
 from .store.db import Store
 from .sync.manager import SyncManager
 
@@ -80,7 +81,15 @@ async def serve(args: argparse.Namespace) -> None:
     sync = SyncManager(store)
     sync.attach(link)
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync)
+    faces = FaceService(store, link, queue, APP_DIR / "faces")
+
+    def after_job(job) -> None:
+        if job.kind == "sync" and job.state == "done":
+            refresh = asyncio.ensure_future(faces.refresh_after_sync())
+            refresh.add_done_callback(lambda t: t.exception() and log.warning("face refresh failed: %r", t.exception()))
+
+    queue.on_done.append(after_job)
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:

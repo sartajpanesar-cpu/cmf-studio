@@ -16,6 +16,7 @@ from .bindings import Context, metric_value, resolve
 from .spec import SIZE, CircleLayer, FaceSpec, ImageLayer, RectLayer, RingLayer, TextLayer
 
 FONT_FORMATS = {".ttf": "truetype", ".otf": "opentype", ".woff": "woff", ".woff2": "woff2"}
+MIME_FORMATS = {"font/ttf": "truetype", "font/otf": "opentype", "font/woff": "woff", "font/woff2": "woff2"}
 
 
 def data_uri(path: Path) -> str:
@@ -25,6 +26,19 @@ def data_uri(path: Path) -> str:
 
 def _src(src: str, base: Path) -> str:
     return src if src.startswith("data:") else data_uri((base / src).resolve())
+
+
+def inline_assets(spec: FaceSpec, base_dir: Path | str) -> FaceSpec:
+    """Replace local image and font paths with data: URIs so the spec is self-contained (stored in the DB)."""
+    base = Path(base_dir)
+    data = spec.model_dump(by_alias=True)
+    for layer in data["layers"]:
+        if layer["type"] == "image" and not layer["src"].startswith("data:"):
+            layer["src"] = data_uri((base / layer["src"]).resolve())
+    for font in data["fonts"]:
+        if font["source"] == "local" and font["path"] and not font["path"].startswith("data:"):
+            font["path"] = data_uri((base / font["path"]).resolve())
+    return FaceSpec.model_validate(data)
 
 
 def _font_css(spec: FaceSpec, base: Path) -> tuple[str, str]:
@@ -40,9 +54,13 @@ def _font_css(spec: FaceSpec, base: Path) -> tuple[str, str]:
         elif f.source == "local":
             if not f.path:
                 raise ValueError(f"local font {f.family!r} needs a path")
-            path = (base / f.path).resolve()
-            fmt = FONT_FORMATS.get(path.suffix.lower(), "truetype")
-            faces.append(f"@font-face{{font-family:'{f.family}';src:url({data_uri(path)}) format('{fmt}');}}")
+            if f.path.startswith("data:"):
+                mime = f.path[5:].split(";", 1)[0]
+                uri, fmt = f.path, MIME_FORMATS.get(mime, "truetype")
+            else:
+                path = (base / f.path).resolve()
+                uri, fmt = data_uri(path), FONT_FORMATS.get(path.suffix.lower(), "truetype")
+            faces.append(f"@font-face{{font-family:'{f.family}';src:url({uri}) format('{fmt}');}}")
     return "\n".join(links), "\n".join(faces)
 
 

@@ -41,6 +41,14 @@ MIGRATIONS: list[str] = [
     CREATE TABLE events(id INTEGER PRIMARY KEY, ts REAL NOT NULL, kind TEXT NOT NULL, data_json TEXT NOT NULL);
     CREATE INDEX events_ts ON events(ts);
     """,
+    # 2: faces get a pixel digest + unique names; small key/value settings table
+    """
+    DELETE FROM faces WHERE id NOT IN (SELECT max(id) FROM faces GROUP BY name);
+    ALTER TABLE faces ADD COLUMN last_digest TEXT;
+    ALTER TABLE faces ADD COLUMN updated_at REAL;
+    CREATE UNIQUE INDEX faces_name ON faces(name);
+    CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    """,
 ]
 
 OPEN_JOB_STATES = ("queued", "running", "deferred")
@@ -175,6 +183,47 @@ class Store:
     def sample_counts(self) -> dict[str, int]:
         rows = self.db.execute("SELECT metric, count(*) AS n FROM samples GROUP BY metric")
         return {r["metric"]: r["n"] for r in rows}
+
+    # -- settings -----------------------------------------------------------------
+
+    def get_kv(self, key: str, default: str | None = None) -> str | None:
+        row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_kv(self, key: str, value: str | None) -> None:
+        if value is None:
+            self.db.execute("DELETE FROM kv WHERE key = ?", (key,))
+        else:
+            self.db.execute(
+                "INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    # -- faces --------------------------------------------------------------------
+
+    def save_face(self, name: str, spec_json: str) -> int:
+        self.db.execute(
+            "INSERT INTO faces(name, spec_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET spec_json = excluded.spec_json, updated_at = excluded.updated_at",
+            (name, spec_json, time.time()),
+        )
+        return self.db.execute("SELECT id FROM faces WHERE name = ?", (name,)).fetchone()["id"]
+
+    def get_face(self, face_id: int) -> sqlite3.Row:
+        row = self.db.execute("SELECT * FROM faces WHERE id = ?", (face_id,)).fetchone()
+        if row is None:
+            raise KeyError(face_id)
+        return row
+
+    def faces(self) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT id, name, last_installed_at, last_digest, updated_at FROM faces ORDER BY name")
+        return [dict(r) for r in rows]
+
+    def mark_face_installed(self, face_id: int, digest: str, png: bytes) -> None:
+        self.db.execute(
+            "UPDATE faces SET last_installed_at = ?, last_digest = ?, last_rendered_png = ? WHERE id = ?",
+            (time.time(), digest, png, face_id),
+        )
 
     # -- jobs -------------------------------------------------------------------
 

@@ -49,6 +49,22 @@ async def _wait_any(events: tuple[asyncio.Event, ...], timeout: float) -> None:
             w.cancel()
 
 
+CUSTOM_DIAL_ID = 0xFFFFFFFF  # the photo dial's id in the dial list (findings 2026-10-25)
+
+
+def parse_dial_list(payload: bytes) -> dict[str, Any]:
+    """DIAL_COMMAND_RET: result u8 ‖ active index u8 ‖ total u8 ‖ max u8 ‖ total × id u32 LE (spec §11.1)."""
+    _result, active, total, maximum = payload[:4]
+    ids = [int.from_bytes(payload[4 + 4 * i : 8 + 4 * i], "little") for i in range(total) if 8 + 4 * i <= len(payload)]
+    return {
+        "active_index": active,
+        "active_id": ids[active] if active < len(ids) else None,
+        "total": total,
+        "max": maximum,
+        "ids": ids,
+    }
+
+
 class LinkState(enum.StrEnum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
@@ -116,6 +132,7 @@ class WatchLink:
         self.state = LinkState.DISCONNECTED
         self.connected = asyncio.Event()
         self.battery: int | None = None
+        self.dials: dict[str, Any] | None = None  # from DIAL_COMMAND_RET pushes (after login / TIME)
         self.firmware: str | None = None
         self.serial: str | None = None
         self.last_error: str | None = None
@@ -174,7 +191,15 @@ class WatchLink:
             "connected_since": self.connected_since,
             "last_keepalive_at": self.last_keepalive_at,
             "last_error": self.last_error,
+            "dials": self.dials,
         }
+
+    @property
+    def custom_face_active(self) -> bool | None:
+        """Is the watch showing the custom photo dial? None until the watch has reported its dial list."""
+        if not self.dials:
+            return None
+        return self.dials["active_id"] == CUSTOM_DIAL_ID
 
     # -- supervisor -----------------------------------------------------------
 
@@ -303,6 +328,9 @@ class WatchLink:
             self._emit("button", name=event.name, raw=event.raw.hex())
         elif msg.op == ops.BATTERY and msg.payload:
             self.battery = msg.payload[0]
+        elif msg.op == ops.DIAL_COMMAND_RET and len(msg.payload) >= 4:
+            self.dials = parse_dial_list(msg.payload)
+            self._emit("frame", op=ops.name_of(msg.op), payload=msg.payload.hex())
         else:
             self._emit("frame", op=ops.name_of(msg.op), payload=msg.payload.hex())
 

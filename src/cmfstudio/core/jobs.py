@@ -75,6 +75,7 @@ class JobQueue:
         self._kick = asyncio.Event()
         self._waiters: dict[int, list[asyncio.Future[Job]]] = {}
         self._task: asyncio.Task | None = None
+        self.on_done: list[Callable[[Job], None]] = []  # called with each job that reaches a final state
 
     def start(self) -> None:
         for job in self.store.open_jobs():
@@ -115,6 +116,11 @@ class JobQueue:
         self.store.update_job(job_id, **fields)
         job = self.store.get_job(job_id)
         self.store.add_event("job", {"id": job_id, "kind": job.kind, "state": job.state, "error": job.error})
+        for hook in self.on_done:
+            try:
+                hook(job)
+            except Exception:
+                log.exception("on_done hook failed for job %s", job_id)
         for fut in self._waiters.pop(job_id, []):
             if not fut.done():
                 fut.set_result(job)

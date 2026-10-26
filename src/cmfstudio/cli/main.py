@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -88,6 +90,67 @@ def cmd_face_install(c: Client, a: argparse.Namespace) -> None:
     confirm("This REPLACES the watch's only custom photo face. Back up the current one first. Continue?", a.yes)
     params = {"confirm": True, "name": path.stem, "style": a.style, "x": a.x, "y": a.y, "color565": int(a.color, 16)}
     show_job(c.call("POST", "/faces/install", params=params, content=path.read_bytes()))
+
+
+def load_spec(path_str: str) -> dict[str, Any]:
+    from ..render.html import inline_assets
+    from ..render.spec import FaceSpec
+
+    path = Path(path_str)
+    if not path.is_file():
+        sys.exit(f"no such spec file: {path}")
+    try:
+        spec = FaceSpec.model_validate_json(path.read_text())
+    except ValueError as exc:
+        sys.exit(f"invalid face spec {path}:\n{exc}")
+    return inline_assets(spec, path.parent).model_dump(by_alias=True)
+
+
+def show_checks(res: dict[str, Any]) -> None:
+    ch = res["checks"]
+    print(f"{res['name']}: {res['bytes'] / 1024:.0f} KB, {ch['lit_fraction']:.0%} of the screen lit")
+    for w in ch["warnings"]:
+        print(f"  warning: {w}")
+
+
+def cmd_face_preview(c: Client, a: argparse.Namespace) -> None:
+    spec = load_spec(a.spec)
+    res = c.call("POST", "/faces/preview", json=spec)
+    out = Path(a.output or f"{spec['name']}-preview.png")
+    out.write_bytes(base64.b64decode(res["preview_png"]))
+    show_checks(res)
+    print(f"preview (what the watch shows; the box marks the live clock): {out}")
+    if a.open:
+        subprocess.run(["open", str(out)], check=False)
+
+
+def cmd_face_use(c: Client, a: argparse.Namespace) -> None:
+    spec = load_spec(a.spec)
+    confirm("This REPLACES the watch's custom photo face (and makes it active). Continue?", a.yes)
+    face_id = c.call("POST", "/faces", json=spec)["id"]
+    res = c.call("POST", f"/faces/{face_id}/install", params={"confirm": True, "force": True})
+    show_checks(res["render"])
+    show_job(res["job"])
+    if spec.get("refresh") == "on_sync":
+        print("it will re-render after each health sync while it's the face on the watch")
+
+
+def cmd_face_list(c: Client, _a: argparse.Namespace) -> None:
+    res = c.call("GET", "/faces")
+    for f in res["faces"]:
+        mark = "*" if f["id"] == res["active_id"] else " "
+        print(f"{mark} {f['id']:>3}  {f['name']:<24} installed {dts(f['last_installed_at'])}")
+    dials = res.get("watch_dials")
+    if dials:
+        custom = dials["active_id"] == 0xFFFFFFFF
+        print(
+            f"watch: {dials['total']}/{dials['max']} dials, showing {'the custom face' if custom else 'a store face'}"
+        )
+
+
+def cmd_insight(c: Client, a: argparse.Namespace) -> None:
+    c.call("PUT", "/insight", json={"text": " ".join(a.text)})
+    print("insight set; faces with an insight layer pick it up on the next sync")
 
 
 def cmd_pair(c: Client, a: argparse.Namespace) -> None:
@@ -199,6 +262,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--color", default="FFFF", help="clock color, RGB565 hex")
     s.add_argument("-y", "--yes", action="store_true")
     s.set_defaults(func=cmd_face_install)
+    s = face.add_parser("preview", help="render a face spec with today's data to a PNG (doesn't touch the watch)")
+    s.add_argument("spec")
+    s.add_argument("-o", "--output")
+    s.add_argument("--open", action="store_true", help="open the PNG in Preview")
+    s.set_defaults(func=cmd_face_preview)
+    s = face.add_parser("use", help="save a face spec and install it (replaces the custom face)")
+    s.add_argument("spec")
+    s.add_argument("-y", "--yes", action="store_true")
+    s.set_defaults(func=cmd_face_use)
+    face.add_parser("list", help="saved faces and what the watch is showing").set_defaults(func=cmd_face_list)
+
+    s = sub.add_parser("insight", help="set the text for faces' insight binding")
+    s.add_argument("text", nargs="*")
+    s.set_defaults(func=cmd_insight)
 
     s = sub.add_parser("pair", help="pair this Mac with the watch (after Nothing X has used it)")
     s.add_argument("-y", "--yes", action="store_true")

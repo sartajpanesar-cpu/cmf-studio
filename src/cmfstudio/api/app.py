@@ -7,6 +7,7 @@ Host headers so a web page can't reach it via DNS rebinding.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import io
@@ -24,6 +25,8 @@ from pydantic import BaseModel, Field
 
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core.jobs import JobQueue
+from ..render.service import FaceService
+from ..render.spec import FaceSpec
 from ..store.db import Job, Store
 from ..sync import daily
 from ..sync.manager import SyncManager
@@ -41,8 +44,18 @@ class NotifyIn(BaseModel):
     wait: bool = True
 
 
+class InsightIn(BaseModel):
+    text: str = Field(default="", max_length=80)
+
+
 def create_app(
-    link: WatchLink, queue: JobQueue, store: Store, token: str, faces_dir: Path, sync: SyncManager | None = None
+    link: WatchLink,
+    queue: JobQueue,
+    store: Store,
+    token: str,
+    faces_dir: Path,
+    sync: SyncManager | None = None,
+    faces: FaceService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -96,12 +109,54 @@ def create_app(
         faces_dir.mkdir(parents=True, exist_ok=True)
         bin_path = faces_dir / f"{hashlib.sha256(blob).hexdigest()[:16]}.bin"
         bin_path.write_bytes(blob)
-        store.db.execute(
-            "INSERT INTO faces(name, spec_json) VALUES (?, ?)",
-            (name, json.dumps({"type": "photo", "bin": str(bin_path)})),
-        )
+        store.save_face(name, json.dumps({"type": "photo", "bin": str(bin_path)}))
         args = {"bin_path": str(bin_path), "style": style, "x": x, "y": y, "color565": color565}
         return await run(queue.submit("install_face", args), wait)
+
+    def need_faces() -> FaceService:
+        if faces is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "faces not configured")
+        return faces
+
+    @app.post("/faces/preview", dependencies=[Depends(auth)])
+    async def post_face_preview(spec: FaceSpec) -> dict[str, Any]:
+        """Render with today's data; returns checks and a base64 PNG of what the watch would show."""
+        r = await need_faces().preview(spec)
+        return {**r.summary(), "preview_png": base64.b64encode(r.preview_png).decode()}
+
+    @app.get("/faces", dependencies=[Depends(auth)])
+    async def get_faces() -> dict[str, Any]:
+        svc = need_faces()
+        return {"faces": store.faces(), "active_id": svc.active_id(), "watch_dials": link.dials}
+
+    @app.post("/faces", dependencies=[Depends(auth)])
+    async def post_face(spec: FaceSpec) -> dict[str, Any]:
+        return {"id": need_faces().save(spec), "name": spec.name}
+
+    @app.post("/faces/{face_id}/install", dependencies=[Depends(auth)])
+    async def post_face_id_install(face_id: int, confirm: bool = False, force: bool = False) -> dict[str, Any]:
+        if not confirm:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "installing replaces the watch's only custom photo face; resend with confirm=true",
+            )
+        try:
+            result = await need_faces().install(face_id, force=force)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such face") from None
+        if "job" in result and link.connected.is_set():
+            try:
+                job = await queue.wait(result["job"]["id"], WAIT_S)
+                result["job"] = job.public()
+            except TimeoutError:
+                pass
+        return result
+
+    @app.put("/insight", dependencies=[Depends(auth)])
+    async def put_insight(body: InsightIn) -> dict[str, Any]:
+        """The "insight" binding text (Claude writes it from Phase 4); re-renders on the next sync."""
+        store.set_kv("insight", body.text or None)
+        return {"insight": body.text}
 
     @app.post("/pair", dependencies=[Depends(auth)])
     async def post_pair(confirm: bool = False) -> dict[str, Any]:
