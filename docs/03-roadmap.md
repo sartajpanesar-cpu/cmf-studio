@@ -90,10 +90,11 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 ## Phase 5b — Watch features, no firmware risk (owner-directed 2026-10-26)
 Owner: "go in that order and keep going through all features, test and implement into the web controller". Every
 item: sim/fixture tests first, then the web UI, then a check on the watch. Nothing here writes firmware (Tier 3).
-- [ ] **Native faces — your font for the firmware-drawn time.** Structured dials built from the spec's digital
+- [x] **Native faces — your font for the firmware-drawn time.** Structured dials built from the spec's digital
   templates (362 Steady, 359 Ring Data, 288 Type): every digit set re-drawn in any Google/local font, digit colour,
   background colour/gradient/picture; asset pool rebuilt with every ref tail re-pointed (`render/native*.py`).
-  Installs over a stock face's slot (9075 replace). Sim-tested; on-device install pending
+  Installs over a stock face's slot (9075 replace). Installed on the watch 2026-10-26 over SlopeTime (finish 01,
+  activated); render pending owner check
 - [x] Weather push (+ the city line as a glance: place, text, or a Shortcut's output e.g. next calendar event).
   Open-Meteo, every 30 min while enabled. Sent to the watch once (job 87); display pending owner check
 - [x] Settings through watchd / UI / MCP. Probed the watch's own values first; every write verified by read-back.
