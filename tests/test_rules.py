@@ -160,3 +160,4 @@ async def test_rules_api_reads_and_reloads_but_cannot_write(setup, paired_link, 
         write(engine.path, [{"on": "button", "button": "prev", "do": [{"action": "sync"}]}])
         assert (await c.post("/rules/reload")).json()["rules"][0]["button"] == "prev"
         assert (await c.put("/rules", json={})).status_code == 405
+    await settle(queue, store, "set_music")  # a reload that adds button rules enables buttons right away

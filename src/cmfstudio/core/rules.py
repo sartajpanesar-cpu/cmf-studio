@@ -124,6 +124,8 @@ class RulesEngine:
         self._last_fired.clear()
         if self.error:
             log.warning("rules: %s (using defaults)", self.error)
+        if self.status().get("state") == "connected":
+            self._enable_buttons()  # new button rules work now, not only after the next reconnect
         return self.describe()
 
     def describe(self) -> dict[str, Any]:
@@ -141,10 +143,14 @@ class RulesEngine:
     # -- triggers (wired to the link's events and the queue's on_done) ------------------------------------------
 
     def on_link_event(self, event: dict[str, Any]) -> None:
-        if event["kind"] == "state" and event.get("state") == "connected" and self.wants_buttons:
-            self.queue.submit("set_music", {"track": MUSIC_TRACK, "artist": "buttons ready"}, ttl_s=60)
+        if event["kind"] == "state" and event.get("state") == "connected":
+            self._enable_buttons()
         elif event["kind"] == "button":
             self._fire(lambda r: r.on == "button" and r.button == event["name"], {"button": event["name"]})
+
+    def _enable_buttons(self) -> None:
+        if self.wants_buttons:
+            self.queue.submit("set_music", {"track": MUSIC_TRACK, "artist": "buttons ready"}, ttl_s=60)
 
     def on_job_done(self, job: Job) -> None:
         if job.kind == "sync" and job.state == "done":
