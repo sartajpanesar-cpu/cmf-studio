@@ -88,7 +88,8 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 - [x] Claude Code hooks → watch alerts (oh-my-wrist pattern): `cmf-hook` in `.claude/settings.json`. Turns of
   ≥ 60 s (`CMF_HOOK_MIN_S`) and permission/idle prompts alert the wrist; 5 min TTL, never blocks Claude.
   Pipe-tested against the real watch 2026-10-26 (job acked)
-- [ ] Threat model + least-privilege write-up (portfolio artifact)
+- [x] Threat model + least-privilege write-up (portfolio artifact): `docs/07-threat-model.md`. Writing it found and
+  fixed two renderer issues (font-name markup injection, unrestricted local file reads) plus JS-off, fonts-only egress
 
 ## Phase 6 — Firmware research (read-only, optional) · open-ended
 - [ ] Obtain stock OTA for the current firmware version

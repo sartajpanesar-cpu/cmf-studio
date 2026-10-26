@@ -22,12 +22,27 @@ async def render_png(page_html: str, timeout_ms: int = 15_000) -> bytes:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
-            page = await browser.new_page(viewport={"width": SIZE, "height": SIZE}, device_scale_factor=1)
+            # specs come from the API and MCP: no scripts, and the only network access is Google Fonts
+            page = await browser.new_page(
+                viewport={"width": SIZE, "height": SIZE}, device_scale_factor=1, java_script_enabled=False
+            )
+            await page.route("**/*", _only_fonts)
             await page.set_content(page_html, wait_until="networkidle", timeout=timeout_ms)
             await page.evaluate("document.fonts.ready")
             return await page.screenshot(type="png", omit_background=False)
         finally:
             await browser.close()
+
+
+FONT_HOSTS = ("https://fonts.googleapis.com/", "https://fonts.gstatic.com/")
+
+
+async def _only_fonts(route) -> None:
+    url = route.request.url
+    if url.startswith(FONT_HOSTS) or url.startswith("data:"):
+        await route.continue_()
+    else:
+        await route.abort()
 
 
 def _circle_mask(size: int = SIZE) -> Image.Image:
