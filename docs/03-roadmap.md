@@ -83,8 +83,8 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
   verified over stdio against the real watchd 2026-10-26)
 - [x] Rules engine: on-sync → re-render face; job-done → notify; button → action (`core/rules.py`, owner-edited
   `rules.json` in watchd's app dir, example `docs/rules.example.json`, `cmf rules [--reload]`). Closed action set:
-  notify (with today's stats), sync, refresh_face, run a macOS Shortcut by name. Sim-tested; the default rule runs on
-  the real watch. Button rules on hardware: pending an owner press test
+  notify (with today's stats), sync, refresh_face, run a macOS Shortcut by name. Verified on the real watch 2026-10-26:
+  reload → set_music, play_pause → stats notification (acked), next → sync → refresh rule
 - [x] Claude Code hooks → watch alerts (oh-my-wrist pattern): `cmf-hook` in `.claude/settings.json`. Turns of
   ≥ 60 s (`CMF_HOOK_MIN_S`) and permission/idle prompts alert the wrist; 5 min TTL, never blocks Claude.
   Pipe-tested against the real watch 2026-10-26 (job acked)
