@@ -16,11 +16,13 @@ dependencies = [
     "pillow>=11",
     "numpy>=2",
     "anthropic>=1",
+    "mcp>=1.10",
 ]
 
 [project.scripts]
 cmf = "cmfstudio.cli.main:main"
 watchd = "cmfstudio.watchd:main"
+cmf-mcp = "cmfstudio.mcp.server:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
