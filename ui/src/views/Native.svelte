@@ -16,9 +16,11 @@
   // Fonts that read well as big digits, by style. [family, weight]
   const PRESETS: [string, [string, number][]][] = [
     ["Digital", [["Orbitron", 600], ["Share Tech Mono", 400], ["Audiowide", 400], ["Michroma", 400], ["Chakra Petch", 600],
-      ["Rajdhani", 600], ["Oxanium", 600], ["Major Mono Display", 400], ["VT323", 400], ["Silkscreen", 400]]],
+      ["Rajdhani", 600], ["Oxanium", 600], ["Major Mono Display", 400], ["VT323", 400], ["Silkscreen", 400],
+      ["Doto", 700], ["Sixtyfour", 400], ["Tektur", 600]]],
     ["Clean", [["Inter", 600], ["Manrope", 700], ["Outfit", 600], ["Sora", 600], ["Space Grotesk", 600], ["Lexend", 500],
-      ["Barlow Condensed", 600], ["Oswald", 500], ["Bebas Neue", 400], ["Anton", 400], ["Big Shoulders Display", 700]]],
+      ["Barlow Condensed", 600], ["Oswald", 500], ["Bebas Neue", 400], ["Anton", 400], ["Big Shoulders Display", 700],
+      ["Teko", 500], ["Unbounded", 600]]],
     ["Elegant", [["Playfair Display", 700], ["DM Serif Display", 400], ["Cormorant Garamond", 600], ["Abril Fatface", 400], ["Fraunces", 600]]],
     ["Playful", [["Nunito", 800], ["Fredoka", 600], ["Righteous", 400], ["Bungee", 400], ["Monoton", 400], ["Pacifico", 400], ["Caveat", 600]]],
     ["Mono", [["JetBrains Mono", 600], ["IBM Plex Mono", 600], ["Space Mono", 700], ["Roboto Mono", 600]]],
