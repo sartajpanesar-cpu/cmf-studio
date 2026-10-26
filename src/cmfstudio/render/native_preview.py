@@ -54,7 +54,8 @@ def render(dial: NativeDial, values: dict[int, int], aod: bool = False) -> Image
     b = dial.b
 
     def struct_at(body: int) -> dict[str, Any]:
-        x, y, w, h = struct.unpack_from("<hhHH", b, body)
+        x, y = dial.position(body)  # includes pending moves
+        w, h = struct.unpack_from("<HH", b, body + 4)
         return {"x": x, "y": y, "w": w, "h": h, "src": b[body + 13], "tail": tails.get(body + 0x12)}
 
     def children(off: int, end: int):

@@ -9,7 +9,7 @@
   type Spec = {
     name: string; template: number; font: Font | null; weight: number; digit_color: string | null;
     background: string | null; background_bottom: string | null; background_face_id: number | null;
-    show_date: boolean; show_data: boolean;
+    show_date: boolean; show_data: boolean; center_time: boolean;
   };
   type Dial = { id: number; name: string; active: boolean; kind: "stock" | "custom" | "native" };
 
@@ -39,7 +39,7 @@
   const blank = (): Spec => ({
     name: "my-native-face", template: 362, font: { family: "Orbitron", source: "google", weights: [600] },
     weight: 600, digit_color: "#e8c66a", background: "#000000", background_bottom: null, background_face_id: null,
-    show_date: true, show_data: false,
+    show_date: true, show_data: false, center_time: true,
   });
 
   let templates = $state<Template[]>([]);
@@ -246,6 +246,7 @@
     {/if}
 
     <h3>Show</h3>
+    <label class="check"><input type="checkbox" bind:checked={spec.center_time} /> Centre the time on the screen</label>
     <label class="check"><input type="checkbox" bind:checked={spec.show_date} /> Date and weekday</label>
     <label class="check"><input type="checkbox" bind:checked={spec.show_data} /> Data widgets (steps, calories, heart rate, battery…)</label>
     <p class="muted tiny">Off hides them on the watch too. The templates' data widgets are placeholders whose meaning isn't fully verified.</p>

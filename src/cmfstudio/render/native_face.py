@@ -63,6 +63,7 @@ class NativeSpec(BaseModel):
     background_face_id: int | None = Field(None, description="a saved Studio design as the background picture")
     show_date: bool = Field(True, description="the template's date / weekday widgets")
     show_data: bool = Field(False, description="steps, calories, heart rate, battery… (template placeholders)")
+    center_time: bool = Field(True, description="shift the hours:minutes row to the middle of the screen")
 
 
 @dataclass
@@ -113,6 +114,9 @@ async def build(
             rgba[..., :3] = tint  # one colour everywhere: straight alpha, and it compresses far better
             rgba[..., 3] = alpha
             dial.replace(frame, rgba)
+
+    if spec.center_time:
+        _center_time(dial)
 
     hidden = {"date"} if not spec.show_date else set()
     hidden |= {"data"} if not spec.show_data else set()
@@ -239,6 +243,84 @@ def widgets(dial: NativeDial) -> list[tuple[str, set[int]]]:
 
     walk(36, dial.first_asset)
     return out
+
+
+HOUR_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
+MINUTE_IDS = {0x0B, 0x0C, 0x0D}
+
+
+def _center_time(dial: NativeDial, width: int = SIZE) -> None:
+    """Centre each screen's hours:minutes row horizontally (moves only the nodes on that row)."""
+    b = dial.b
+    tails = {t.at: t for t in dial.tails}
+
+    def nodes(off: int, end: int, out: list) -> None:
+        while off < end:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag in (0x30, 0x60):
+                st = digits = None
+                conds = False
+                o = cb
+                while o < cb + ln:
+                    t2, l2 = b[o], int.from_bytes(b[o + 1 : o + 3], "little")
+                    if t2 == 0x01:
+                        st = o + 3
+                    elif t2 == 0x40:
+                        digits = b[o + 3]
+                    elif t2 == 0x02:
+                        conds = True
+                    o += 3 + l2
+                if st is not None and (tail := tails.get(st + 0x12)):
+                    frames = dial.chain(tail)
+                    out.append(
+                        {
+                            "tag": tag,
+                            "st": st,
+                            "src": b[st + 13],
+                            "conds": conds,
+                            "digits": digits,
+                            "w": max(f.w for f in frames),
+                            "h": frames[0].h,
+                        }
+                    )
+            off = cb + ln
+
+    def screens(off: int, end: int) -> None:
+        while off < end:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag == 0x20:
+                screens(cb, cb + ln)
+            elif tag in (0x21, 0x22):
+                found: list = []
+                nodes(cb, cb + ln, found)
+                _center_row(dial, found, width)
+            off = cb + ln
+
+    screens(36, dial.first_asset)
+
+
+def _center_row(dial: NativeDial, found: list[dict], width: int) -> None:
+    hours = [n for n in found if n["tag"] == 0x60 and n["src"] in HOUR_IDS]
+    minutes = [n for n in found if n["tag"] == 0x60 and n["src"] in MINUTE_IDS]
+    if not hours or not minutes:
+        return
+    _x, row_y = dial.position(hours[0]["st"])
+    row = []
+    for n in found:
+        x, y = dial.position(n["st"])
+        time_node = n["tag"] == 0x60 and n["src"] in TIME_IDS
+        separator = n["tag"] == 0x30 and n["src"] == 0 and not n["conds"]  # e.g. the colon
+        if abs(y - row_y) <= 12 and (time_node or separator):
+            count = 2 if n["tag"] == 0x60 else 1  # hours / minutes always show two digits
+            row.append((n["st"], x, y, n["w"] * count))
+    left = min(x for _st, x, _y, _w in row)
+    right = max(x + w for _st, x, _y, w in row)
+    shift = round((width - (right - left)) / 2 - left)
+    if shift:
+        for st, x, y, _w in row:
+            dial.move(st, x + shift, y)
 
 
 def _hide(dial: NativeDial, categories: set[str]) -> None:

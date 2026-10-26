@@ -89,6 +89,7 @@ class NativeDial:
         if problems:
             raise NativeFormatError("; ".join(problems))
         self._new: dict[int, bytes] = {}  # asset offset -> new LZ4 block
+        self._moves: dict[int, tuple[int, int]] = {}  # 0x01 struct body offset -> new (x, y)
 
     # -- structure ---------------------------------------------------------------------------------------------
 
@@ -190,6 +191,15 @@ class NativeDial:
         self._new[asset.off] = block
         return len(block)
 
+    def move(self, struct_body: int, x: int, y: int) -> None:
+        """Re-position a node (its 0x01 struct's x, y: i16 top-left). Same bytes, same length."""
+        if not (-1000 <= x <= 1000 and -1000 <= y <= 1000):
+            raise NativeFormatError(f"position {x},{y} is off the canvas")
+        self._moves[struct_body] = (x, y)
+
+    def position(self, struct_body: int) -> tuple[int, int]:
+        return self._moves.get(struct_body) or struct.unpack_from("<hh", self.b, struct_body)
+
     # -- output ---------------------------------------------------------------------------------------------------
 
     def build(self) -> bytes:
@@ -211,6 +221,8 @@ class NativeDial:
             raise NativeFormatError(f"unrecognised data at the end of the asset pool ({pos:#x})")
 
         out = bytearray(b[:old_first]) + pool + bytes(HEADER)
+        for body, (x, y) in self._moves.items():
+            struct.pack_into("<hh", out, body, x, y)
         for t in self.tails:
             frames = self.chain(t)
             struct.pack_into("<I", out, t.at + 3, moved[frames[0].off][0])

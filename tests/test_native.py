@@ -206,3 +206,21 @@ def test_hiding_extras_blanks_their_images_only():
         elif cat == "time":
             before = max(int(dial.decode(dial.assets[o])[..., 3].max()) for o in imgs)
             assert alpha_max == before, "time widgets keep their pixels (AM/PM is blank in this template)"
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [359, 362, 288])
+def test_time_row_is_centred_on_both_screens(n):
+    from cmfstudio.render.native_face import _center_time, _hide
+
+    dial = NativeDial(template(n))
+    _center_time(dial)
+    _hide(dial, {"date", "data"})  # so every lit pixel is the time row
+    out = NativeDial(dial.build())
+    values = native_preview.sample_values(dt.datetime(2026, 1, 1, 20, 58))  # wide digits: ink ≈ the digit slots
+    for aod in (False, True):
+        img = np.asarray(native_preview.render(out, values, aod))[..., :3].astype(int)
+        background = img[233, 2]  # a pixel left of the clock
+        xs = np.argwhere(np.abs(img - background).max(axis=2) > 60)[:, 1]
+        if len(xs):
+            assert abs((xs.min() + xs.max()) / 2 - 233) <= 3, (n, aod, int(xs.min()), int(xs.max()))
