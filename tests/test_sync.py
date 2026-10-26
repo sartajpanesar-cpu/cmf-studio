@@ -79,9 +79,24 @@ def day(watch):
         (p.SPO2, pairs((T0, 97))),
         (p.STRESS, pairs((T0, 33))),
         (p.SLEEP_DATA, sleep_frame(T0 - 8 * 3600, T0, (3600, 14400, 5400, 1800), [(T0 - 8 * 3600, 3600, 1)])),
-        (p.WORKOUT_SUMMARY, bytes(54)),
+        (p.WORKOUT_SUMMARY, workout_v1(T0 - 3600, 1800, sport=0x02, hr=142, kcal=310, steps=4800, dist=5200)),
+        (p.WORKOUT_GPS, gps((T0 - 3600, 48.85, 2.34), (T0 - 3000, 48.86, 2.35))),
     ]
     return watch
+
+
+def workout_v1(start, duration, sport, hr, kcal, steps, dist) -> bytes:
+    """A 54-byte WORKOUT_SUMMARY record in Gadgetbridge's layout."""
+    head = struct.pack("<IHBBHIIH", start, duration, sport, hr, kcal, steps, dist, 345) + bytes(6)
+    return (
+        head
+        + struct.pack("<IBB", start + duration, 1, 0)
+        + struct.pack("<4H5HI", 120, 310, 50, 600, 1, 5, 12, 10, 2, 91000)
+    )
+
+
+def gps(*points) -> bytes:
+    return b"".join(struct.pack("<iii", ts, round(lon * 1e7), round(lat * 1e7)) for ts, lat, lon in points)
 
 
 @pytest.fixture
@@ -99,8 +114,17 @@ async def test_fetch_stores_raw_then_parsed(sync, paired_link, day):
     assert res["new_samples"]["steps_cum"] == 20 and res["new_samples"]["hr"] == 2
     assert res["sleep_sessions"] == 1 and res["parse_errors"] == 0
     raw = store.db.execute("SELECT opcode, parser_version FROM raw_frames ORDER BY id").fetchall()
-    assert len(raw) == 7
-    assert dict(raw)["0057:0001"] is None  # workout summary kept raw, not parsed
+    assert len(raw) == 8 and dict(raw)["0057:0001"] == p.PARSER_VERSION
+    assert res["workouts"] == 1 and res["gps_points"] == 2
+    (w,) = store.workouts()
+    assert (w["sport"], w["duration_s"], w["distance_m"], w["hr_avg"], w["layout"]) == (
+        2,
+        1800,
+        5200,
+        142,
+        "v1-gadgetbridge",
+    )
+    assert w["route_points"] == 2 and store.route(w["start_ts"], w["end_ts"])[1][1:] == [48.86, 2.35]
     counts = store.sample_counts()
     assert counts == {
         "steps_cum": 20, "distance_cum_m": 20, "calories_cum_cal": 20,
@@ -250,9 +274,7 @@ async def test_reparse_repairs_samples_from_raw(sync, paired_link, day):
     res = mgr.reparse()
     assert store.samples("hr") == [(T0, 61.0), (T0 + 600, 72.0)]
     assert res["parse_errors"] == 0 and res["days_rebuilt"] > 0
-    assert {r[0] for r in store.db.execute("SELECT parser_version FROM raw_frames WHERE opcode != '0057:0001'")} == {
-        p.PARSER_VERSION
-    }
+    assert {r[0] for r in store.db.execute("SELECT parser_version FROM raw_frames")} == {p.PARSER_VERSION}
 
 
 # -- health views ----------------------------------------------------------------
@@ -312,3 +334,27 @@ def test_series_has_every_day():
 
     rows = health.series(Store(":memory:"), 7)
     assert len(rows) == 7 and all(set(r) == {"date"} for r in rows)
+
+
+# -- workouts --------------------------------------------------------------------
+
+
+def test_workout_v1_falls_back_to_the_spec_layout():
+    rec = struct.pack("<IIIBBH", T0, T0 + 1200, 1200, 0x05, 128, 240) + bytes(54 - 16)  # start, end, duration first
+    (w,) = p.workouts_v1(rec)
+    assert w.layout == "v1-spec" and (w.duration_s, w.sport, w.hr_avg, w.kcal) == (1200, 5, 128, 240)
+    with pytest.raises(p.ParseError):
+        p.workouts_v1(bytes(54))
+    with pytest.raises(p.ParseError):
+        p.workouts_v1(bytes(40))
+
+
+def test_workout_v3_and_gps():
+    head = struct.pack("<IIIBBH", T0, T0 + 3000, 3000, 0x02, 150, 420)
+    tail = struct.pack("<8I", 6100, 8000, 0, 290, 375, 0, 168, 112)
+    (w,) = p.workout_v3(head + bytes(40) + tail)
+    assert (w.distance_m, w.pace_avg_s_km, w.has_gps, w.extra["cadence_spm"]) == (8000, 375, True, 168)
+    (short,) = p.workout_v3(head)
+    assert short.distance_m is None and not short.has_gps
+    pts = p.gps_points(struct.pack("<iii", T0, 23_000_000, 488_500_000) + struct.pack("<iii", T0 + 5, 0, 0))
+    assert pts == [(T0, 48.85, 2.3)], "lat/lon swapped right and (0,0) fixes dropped"

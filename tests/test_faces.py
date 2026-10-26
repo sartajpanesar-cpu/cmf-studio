@@ -138,7 +138,7 @@ def test_migration_2_dedupes_face_names(tmp_path):
     old.commit()
     old.close()
     store = Store(path)
-    assert store.version == 3  # migrated all the way
+    assert store.version == 4  # migrated all the way
     assert [(f["name"]) for f in store.faces()] == ["a", "b"]
     assert store.db.execute("SELECT spec_json FROM faces WHERE name='a'").fetchone()[0] == "2"
 

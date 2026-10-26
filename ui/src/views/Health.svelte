@@ -2,6 +2,7 @@
   import { get, post, put } from "../lib/api";
   import Bars from "../lib/charts/Bars.svelte";
   import Line from "../lib/charts/Line.svelte";
+  import WorkoutsCard from "../lib/WorkoutsCard.svelte";
 
   const ranges = [7, 30, 90] as const;
   let days = $state<number>(readRange());
@@ -218,6 +219,8 @@
       {/if}
     {/if}
   </section>
+
+  <WorkoutsCard />
 </div>
 
 <style>

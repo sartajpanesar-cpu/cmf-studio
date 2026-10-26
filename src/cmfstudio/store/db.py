@@ -55,6 +55,16 @@ MIGRATIONS: list[str] = [
         id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, spec_json TEXT NOT NULL, updated_at REAL,
         last_installed_at REAL, dial_id INTEGER, preview_png BLOB);
     """,
+    # 4: workouts and their GPS routes (parsed from raw frames; layout recorded per workout). Replaces the
+    # placeholder workouts table from 1, which nothing ever wrote to.
+    """
+    DROP TABLE workouts;
+    CREATE TABLE workouts(
+        start_ts INTEGER PRIMARY KEY, end_ts INTEGER NOT NULL, duration_s INTEGER NOT NULL, sport INTEGER NOT NULL,
+        hr_avg INTEGER, kcal INTEGER, steps INTEGER, distance_m INTEGER, pace_avg_s_km INTEGER, has_gps INTEGER,
+        layout TEXT, extra_json TEXT, source_frame_id INTEGER);
+    CREATE TABLE gps_points(ts INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL);
+    """,
 ]
 
 OPEN_JOB_STATES = ("queued", "running", "deferred")
@@ -166,6 +176,48 @@ class Store:
             self.db.execute("ROLLBACK")
             raise
         return new
+
+    def upsert_workout(self, w: Any, source_frame_id: int | None) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO workouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                w.start_ts,
+                w.end_ts,
+                w.duration_s,
+                w.sport,
+                w.hr_avg,
+                w.kcal,
+                w.steps,
+                w.distance_m,
+                w.pace_avg_s_km,
+                int(w.has_gps),
+                w.layout,
+                json.dumps(w.extra),
+                source_frame_id,
+            ),
+        )
+
+    def add_gps_points(self, points: list[tuple[int, float, float]]) -> None:
+        self.db.executemany("INSERT OR REPLACE INTO gps_points(ts, lat, lon) VALUES (?, ?, ?)", points)
+
+    def workouts(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM workouts ORDER BY start_ts DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["extra"] = json.loads(d.pop("extra_json") or "{}")
+            d["has_gps"] = bool(d["has_gps"])
+            d["route_points"] = self.db.execute(
+                "SELECT count(*) FROM gps_points WHERE ts BETWEEN ? AND ?", (r["start_ts"], r["end_ts"])
+            ).fetchone()[0]
+            out.append(d)
+        return out
+
+    def route(self, start_ts: int, end_ts: int) -> list[list[float]]:
+        rows = self.db.execute(
+            "SELECT ts, lat, lon FROM gps_points WHERE ts BETWEEN ? AND ? ORDER BY ts", (start_ts, end_ts)
+        )
+        return [[r[0], r[1], r[2]] for r in rows]
 
     def upsert_sleep(self, session: Any, source_frame_id: int | None) -> None:
         stages = {

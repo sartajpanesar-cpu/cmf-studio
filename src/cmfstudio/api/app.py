@@ -534,6 +534,20 @@ def create_app(
         store.add_event("settings_probe", out)
         return out
 
+    @app.get("/workouts", dependencies=[Depends(auth)])
+    async def get_workouts(limit: int = Query(30, ge=1, le=500)) -> list[dict[str, Any]]:
+        return [
+            {**w, "sport_name": settings_mod.SPORTS.get(w["sport"], f"Sport {w['sport']}")}
+            for w in store.workouts(limit)
+        ]
+
+    @app.get("/workouts/{start_ts}/route", dependencies=[Depends(auth)])
+    async def get_workout_route(start_ts: int) -> dict[str, Any]:
+        w = next((w for w in store.workouts(500) if w["start_ts"] == start_ts), None)
+        if w is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such workout")
+        return {"start_ts": start_ts, "points": store.route(w["start_ts"], w["end_ts"])}
+
     @app.get("/rules", dependencies=[Depends(auth)])
     async def get_rules() -> dict[str, Any]:
         if rules is None:

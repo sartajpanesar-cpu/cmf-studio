@@ -94,11 +94,15 @@ item: sim/fixture tests first, then the web UI, then a check on the watch. Nothi
   templates (362 Steady, 359 Ring Data, 288 Type): every digit set re-drawn in any Google/local font, digit colour,
   background colour/gradient/picture; asset pool rebuilt with every ref tail re-pointed (`render/native*.py`).
   Installs over a stock face's slot (9075 replace). Sim-tested; on-device install pending
-- [ ] Weather push (+ the city line as a glance: next calendar event)
-- [ ] Settings through watchd / UI / MCP: alarms (read-modify-write), goals, Do Not Disturb, standing/water
-  reminders, health monitoring switches, HR alerts, units / 24h, world clock, sports menu, quick replies
-- [ ] Workouts + GPS routes decoded from sync (read-only)
-- [ ] Find my watch; find phone → Mac sound
+- [x] Weather push (+ the city line as a glance: place, text, or a Shortcut's output e.g. next calendar event).
+  Open-Meteo, every 30 min while enabled. Sent to the watch once (job 87); display pending owner check
+- [x] Settings through watchd / UI / MCP. Probed the watch's own values first; every write verified by read-back.
+  On-device: alarms (BE in / LE out, sorted), DND, reminders, sports menu (read) work; goals acked but unverifiable;
+  monitoring / HR alerts / units write-only (sim). MCP: get_watch_settings, set_alarm, remove_alarm, set_goals,
+  set_do_not_disturb, find_watch. Not done: world clock (city-id table unknown), quick replies (no use with an iPhone)
+- [x] Workouts + GPS routes decoded from sync (Gadgetbridge layouts, v1 sanity-checked against the spec's layout),
+  Health-tab list + route drawing. No workout recorded on the watch yet: decode unverified on real data
+- [x] Find my watch (acked on device); find phone → Mac plays a sound (sim)
 - [ ] Mac now-playing ↔ watch music card and buttons
 - [ ] (careful) home tiles: reorder ids read back from the watch only; contacts as an info panel, backed up first
 
