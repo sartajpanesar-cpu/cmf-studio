@@ -491,7 +491,7 @@ def create_app(
     @app.get("/settings/written", dependencies=[Depends(auth)])
     async def get_written_settings() -> dict[str, Any]:
         """Write-only settings as last sent from here (the watch can't report them)."""
-        return {k: json.loads(store.get_kv(k) or "null") for k in ("hr_alerts", "units")}
+        return {k: json.loads(store.get_kv(k) or "null") for k in ("hr_alerts", "units", "monitoring", "goals_sent")}
 
     @app.post("/find-watch", dependencies=[Depends(auth)])
     async def post_find_watch() -> dict[str, Any]:

@@ -61,7 +61,7 @@ async def test_snapshot(api):
     snap = (await c.get("/settings")).json()
     assert snap["alarms"][0]["time"] == "08:20" and snap["goals"]["steps"] == 5000
     assert snap["time_format"] == "12h" and snap["wrist_raise"] is True and snap["dnd"] is False
-    assert snap["sports"][0] == {"code": 2, "name": "Indoor running"}
+    assert snap["sports"][0] == {"code": 2, "name": "Outdoor running"}
 
 
 async def test_alarms_write_is_verified_sorted(api):
