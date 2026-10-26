@@ -13,7 +13,6 @@ from cmfstudio.core.jobs import JobQueue
 from cmfstudio.render import describe
 from cmfstudio.render.bindings import Context
 from cmfstudio.render.service import FaceService
-from cmfstudio.render.spec import FaceSpec
 from cmfstudio.store.db import Store
 from cmfstudio.sync import daily, summary
 from cmfstudio.sync.parsers import Sample
@@ -74,19 +73,46 @@ async def test_truncated_answer_is_an_error(monkeypatch):
 # -- describe a face --------------------------------------------------------------------
 
 
-async def test_describe_strips_images_and_forces_refresh(monkeypatch):
-    spec = FaceSpec.model_validate(
-        {
-            "name": "x",
-            "refresh": "manual",
-            "layers": [{"type": "image", "src": "data:,"}, {"type": "text", "bind": "metric:steps"}],
-        }
+def design(**kw):
+    from cmfstudio.render.describe import Design, DesignLayer
+
+    base = dict(kind="text", text="", bind="", x=233, y=233, size=30, height=0, color="#ffffff", font="",
+                weight=400, align="center", goal=0)  # fmt: skip
+    layers = [DesignLayer(**{**base, **layer}) for layer in kw.pop("layers")]
+    return Design(**{"name": "Ice Blue!", "background": "#000000", "clock_style": 3, "clock_x": 70, "clock_y": 100,
+                     "clock_color": "#AADDFF", "layers": layers, **kw})  # fmt: skip
+
+
+def test_design_converts_to_valid_facespec():
+    from cmfstudio.render.describe import to_spec
+
+    spec = to_spec(
+        design(
+            layers=[
+                {"kind": "text", "bind": "date:%a %d", "font": "Inter", "color": "#9AD0FF"},
+                {"kind": "text", "text": "hello", "color": "not-a-colour"},
+                {"kind": "ring", "bind": "metric:steps", "size": 215, "height": 8, "goal": 8000},
+                {"kind": "circle", "size": 200, "height": 2},
+                {"kind": "rect", "x": 200, "y": 300, "size": 66, "height": 3},
+            ]
+        )
     )
-    m = fake_client(monkeypatch, ok(spec))
+    assert spec.name == "ice-blue" and spec.clock.style == 2 and spec.clock.color == "#aaddff"
+    assert [layer.type for layer in spec.layers] == ["text", "text", "ring", "circle", "rect"]
+    assert spec.layers[0].bind == "date:%a %d" and spec.layers[1].text == "hello"
+    assert spec.layers[1].color == "#ffffff"  # invalid colour falls back instead of failing the whole design
+    assert spec.layers[2].max == 8000 and spec.layers[4].w == 66
+    assert [f.family for f in spec.fonts] == ["Inter"]
+
+
+async def test_describe_uses_the_small_design_schema(monkeypatch):
+    from cmfstudio.render.describe import Design
+
+    m = fake_client(monkeypatch, ok(design(layers=[{"kind": "text", "bind": "metric:steps"}])))
     out = await describe.describe_face("minimal gold", Context(metrics={"steps": 10, "hr": 70}))
-    assert [layer.type for layer in out.layers] == ["text"] and out.refresh == "on_sync"
-    assert "minimal gold" in m.calls[0]["messages"][0]["content"]
-    assert m.calls[0]["output_format"] is FaceSpec
+    assert out.layers[0].bind == "metric:steps" and out.refresh == "on_sync"
+    assert m.calls[0]["output_format"] is Design  # not FaceSpec: its grammar is too large for the API
+    assert "clock_x+" in m.calls[0]["system"]  # measured clock footprints are in the prompt
 
 
 # -- weekly summary: aggregates only ------------------------------------------------------
@@ -147,8 +173,7 @@ async def test_api_refusal_is_422(client, monkeypatch):
 
 @needs_browser
 async def test_api_describe_returns_spec_and_preview(client, monkeypatch):
-    spec = FaceSpec.model_validate({"name": "gold", "layers": [{"type": "text", "bind": "date:%a"}]})
-    fake_client(monkeypatch, ok(spec))
+    fake_client(monkeypatch, ok(design(name="gold", layers=[{"kind": "text", "bind": "date:%a"}])))
     r = (await client.post("/faces/describe", json={"description": "gold minimal"}, headers=AUTH)).json()
     assert r["spec"]["name"] == "gold" and r["preview_png"] and r["checks"]["background_black"]
 
