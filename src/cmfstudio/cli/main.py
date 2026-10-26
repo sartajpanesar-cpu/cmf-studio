@@ -138,6 +138,75 @@ def cmd_face_use(c: Client, a: argparse.Namespace) -> None:
         print("it will re-render after each health sync while it's the face on the watch")
 
 
+CAL_X, CAL_Y = 80, 120  # clock anchor used for calibration
+
+
+def calibration_spec(style: int) -> dict[str, Any]:
+    """A measurement face: 20 px grid, labelled 100 px lines, a red mark at the clock anchor."""
+    layers: list[dict[str, Any]] = []
+    for v in range(20, 466, 20):
+        major = v % 100 == 0
+        colour = "#3a3a3a" if major else "#1a1a1a"
+        layers.append({"type": "rect", "x": v, "y": 0, "w": 1, "h": 466, "fill": colour})
+        layers.append({"type": "rect", "x": 0, "y": v, "w": 466, "h": 1, "fill": colour})
+        if major:
+            for x, y in ((v, 233), (233, v)):
+                layers.append(
+                    {
+                        "type": "text",
+                        "text": str(v),
+                        "x": x + 2,
+                        "y": y - 6,
+                        "size": 10,
+                        "color": "#6a6a6a",
+                        "align": "left",
+                    }
+                )
+    # red corner bracket at the clock's anchor (its top-left)
+    layers += [
+        {"type": "rect", "x": CAL_X - 8, "y": CAL_Y - 1, "w": 8, "h": 2, "fill": "#ff3030"},
+        {"type": "rect", "x": CAL_X - 1, "y": CAL_Y - 8, "w": 2, "h": 8, "fill": "#ff3030"},
+        {
+            "type": "text",
+            "text": f"STYLE {style + 1}",
+            "x": 233,
+            "y": 420,
+            "size": 22,
+            "weight": 700,
+            "color": "#ff3030",
+        },
+    ]
+    return {
+        "name": f"calibrate-clock-{style + 1}",
+        "background": "#000000",
+        "layers": layers,
+        "refresh": "manual",
+        "clock": {"style": style, "x": CAL_X, "y": CAL_Y, "color": "#ffffff"},
+    }
+
+
+def cmd_face_calibrate(c: Client, a: argparse.Namespace) -> None:
+    confirm(
+        "This installs 5 measurement faces in turn (replacing the custom face) so you can photograph each clock "
+        "style, then puts your current face back. Continue?",
+        a.yes,
+    )
+    previous = c.call("GET", "/faces").get("active_id")
+    styles = [int(x) - 1 for x in a.styles.split(",")] if a.styles else range(5)
+    for style in styles:
+        face_id = c.call("POST", "/faces", json=calibration_spec(style))["id"]
+        job = c.call("POST", f"/faces/{face_id}/install", params={"confirm": True, "force": True})["job"]
+        if job["state"] != "done":
+            sys.exit(f"install for style {style + 1} didn't finish ({job['state']}); is the watch connected?")
+        print(f"\nStyle {style + 1} is on the watch. Wake the screen, photograph it straight on (fill the frame),")
+        print(f"save as research/captures/clock-styles/style-{style + 1}.jpg")
+        input("then press Enter for the next style... ")
+    if previous:
+        print("putting your face back...")
+        c.call("POST", f"/faces/{previous}/install", params={"confirm": True, "force": True})
+    print("done. Tell Claude the photos are in research/captures/clock-styles/.")
+
+
 def cmd_face_list(c: Client, _a: argparse.Namespace) -> None:
     res = c.call("GET", "/faces")
     for f in res["faces"]:
@@ -324,6 +393,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-y", "--yes", action="store_true")
     s.set_defaults(func=cmd_face_use)
     face.add_parser("list", help="saved faces and what the watch is showing").set_defaults(func=cmd_face_list)
+    s = face.add_parser("calibrate-clock", help="install a measurement face per clock style to photograph")
+    s.add_argument("--styles", help="e.g. 1,3 (default: all 5)")
+    s.add_argument("-y", "--yes", action="store_true")
+    s.set_defaults(func=cmd_face_calibrate)
     s = face.add_parser("describe", help="have Claude design a face spec from a description (not installed)")
     s.add_argument("description", nargs="+")
     s.add_argument("-o", "--output", help="spec path (default faces/<name>.json)")
