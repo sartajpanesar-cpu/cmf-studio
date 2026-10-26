@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import anthropic
 from cmfkit.watchface import photo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -27,11 +28,13 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from ..ble.link import LinkError, LinkState, WatchLink
+from ..core import claude
 from ..core.jobs import JobQueue
+from ..render import describe
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
 from ..store.db import Job, Store
-from ..sync import daily, health
+from ..sync import daily, health, summary
 from ..sync.manager import SyncManager
 
 # How long a synchronous call waits for its job before returning it still queued.
@@ -45,6 +48,22 @@ class NotifyIn(BaseModel):
     icon: int = Field(default=0xFF, ge=0, le=0xFF)
     ttl_s: float | None = Field(default=3600, gt=0, description="drop if not delivered within this time")
     wait: bool = True
+
+
+class DescribeIn(BaseModel):
+    description: str = Field(min_length=3, max_length=1000)
+
+
+async def call_claude(coro):
+    """Map Claude failures to HTTP errors the UI/CLI can show as-is."""
+    try:
+        return await coro
+    except claude.ClaudeUnavailable as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except claude.ClaudeRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except (anthropic.APIError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Claude request failed: {exc}") from exc
 
 
 class InsightIn(BaseModel):
@@ -166,6 +185,32 @@ def create_app(
             except TimeoutError:
                 pass
         return result
+
+    @app.post("/faces/describe", dependencies=[Depends(auth)])
+    async def post_face_describe(body: DescribeIn) -> dict[str, Any]:
+        """Claude designs a FaceSpec from a description; returns it with a preview. Nothing is installed."""
+        svc = need_faces()
+        spec = await call_claude(describe.describe_face(body.description, svc.context()))
+        r = await svc.preview(spec)
+        return {
+            "spec": spec.model_dump(by_alias=True),
+            **r.summary(),
+            "preview_png": base64.b64encode(r.preview_png).decode(),
+        }
+
+    @app.get("/health/summary", dependencies=[Depends(auth)])
+    async def get_health_summary() -> dict[str, Any]:
+        return {"summary": summary.latest(store)}
+
+    @app.post("/health/summary", dependencies=[Depends(auth)])
+    async def post_health_summary() -> dict[str, Any]:
+        """Ask Claude for this week's recap. Sends daily aggregates only (see /health/summary/payload)."""
+        return {"summary": await call_claude(summary.generate(store))}
+
+    @app.get("/health/summary/payload", dependencies=[Depends(auth)])
+    async def get_health_summary_payload() -> dict[str, Any]:
+        """Exactly what the weekly summary sends to Claude, for inspection."""
+        return summary.aggregates(store)
 
     @app.put("/insight", dependencies=[Depends(auth)])
     async def put_insight(body: InsightIn) -> dict[str, Any]:

@@ -18,6 +18,23 @@
   let confirming = $state(false);
   let installing = $state(false);
   let previewEl = $state<HTMLImageElement | null>(null);
+  let idea = $state("");
+  let describing = $state(false);
+
+  async function describe() {
+    describing = true;
+    error = null;
+    try {
+      const r = await post("/faces/describe", { description: idea });
+      spec = r.spec;
+      selected = spec.layers.length ? 0 : null;
+      notice = `Claude designed “${r.spec.name}”. Tweak it, then Save or Install.`;
+    } catch (e: any) {
+      error = e.message;
+    } finally {
+      describing = false;
+    }
+  }
 
   function loadDraft(): FaceSpec {
     try {
@@ -176,6 +193,14 @@
 
 <div class="studio">
   <aside class="card left">
+    <div class="field"><span>Describe a face</span>
+      <textarea rows="3" bind:value={idea} placeholder="e.g. art deco, gold on black, big step count, sleep and resting heart rate at the bottom"></textarea>
+    </div>
+    <button class="small" disabled={describing || idea.trim().length < 3} onclick={describe}>
+      {describing ? "Claude is designing…" : "Design it with Claude"}
+    </button>
+    <p class="faint tiny">Replaces the current draft. Nothing is installed until you choose to.</p>
+
     <div class="field"><span>Name</span><input bind:value={spec.name} maxlength="60" /></div>
     <div class="row2">
       <div class="field"><span>Background</span><input type="color" bind:value={spec.background} /></div>
@@ -398,6 +423,8 @@
   .confirm { max-width: 420px; margin-top: 8px; }
   .confirm p { margin-top: 0; }
   .confirm button { margin-right: 6px; }
+  textarea { width: 100%; resize: vertical; }
+  .tiny { font-size: 11px; margin: 4px 0 12px; }
   .file { display: grid; gap: 3px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
   .inline { display: flex; align-items: center; gap: 6px; }
   @media (max-width: 980px) {

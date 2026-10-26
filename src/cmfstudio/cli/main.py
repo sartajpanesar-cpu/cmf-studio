@@ -167,6 +167,41 @@ def cmd_ui(c: Client, a: argparse.Namespace) -> None:
     print(f"opened {c.http.base_url}/ui/ in your browser")
 
 
+def cmd_set_key(_a: argparse.Namespace) -> None:
+    import getpass
+
+    from ..core import claude
+
+    key = getpass.getpass("Anthropic API key (input hidden): ").strip()
+    if not key.startswith("sk-ant-"):
+        sys.exit("that doesn't look like an Anthropic API key (sk-ant-...)")
+    claude.set_key(key)
+    print("stored in the macOS Keychain (cmf-studio / anthropic-api-key); watchd uses it on the next request")
+
+
+def cmd_face_describe(c: Client, a: argparse.Namespace) -> None:
+    print("asking Claude for a design (can take ~30 s)...")
+    res = c.call("POST", "/faces/describe", json={"description": " ".join(a.description)})
+    out = Path(a.output or f"faces/{res['spec']['name']}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(res["spec"], indent=2))
+    png = out.with_suffix(".png")
+    png.write_bytes(base64.b64decode(res["preview_png"]))
+    show_checks(res)
+    print(f"spec: {out}\npreview: {png}\ninstall with: uv run cmf face use {out}")
+
+
+def cmd_summary(c: Client, a: argparse.Namespace) -> None:
+    res = c.call("POST" if a.new else "GET", "/health/summary")["summary"]
+    if not res:
+        print("no summary yet; run `cmf summary --new` (sends daily aggregates to Claude)")
+        return
+    print(f"{res['headline']}  ({res['generated_at']})")
+    for o in res["observations"]:
+        print(f"  - {o}")
+    print(f"watch line: {res['insight_line']}")
+
+
 def cmd_pair(c: Client, a: argparse.Namespace) -> None:
     confirm(
         "Pair this Mac with the watch? Nothing X will need to re-pair afterwards. "
@@ -289,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-y", "--yes", action="store_true")
     s.set_defaults(func=cmd_face_use)
     face.add_parser("list", help="saved faces and what the watch is showing").set_defaults(func=cmd_face_list)
+    s = face.add_parser("describe", help="have Claude design a face spec from a description (not installed)")
+    s.add_argument("description", nargs="+")
+    s.add_argument("-o", "--output", help="spec path (default faces/<name>.json)")
+    s.set_defaults(func=cmd_face_describe)
+
+    s = sub.add_parser("summary", help="weekly health recap by Claude (aggregates only)")
+    s.add_argument("--new", action="store_true", help="generate a fresh one")
+    s.set_defaults(func=cmd_summary)
+    sub.add_parser("set-key", help="store your Anthropic API key in the Keychain").set_defaults(
+        func=cmd_set_key, local=True
+    )
 
     s = sub.add_parser("insight", help="set the text for faces' insight binding")
     s.add_argument("text", nargs="*")
@@ -324,4 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None, transport: httpx.BaseTransport | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if getattr(args, "local", False):  # commands that don't talk to watchd
+        args.func(args)
+        return
     args.func(Client(args.url, get_token(), transport), args)

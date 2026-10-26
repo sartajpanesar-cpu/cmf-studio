@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { get } from "../lib/api";
+  import { get, post, put } from "../lib/api";
   import Bars from "../lib/charts/Bars.svelte";
   import Line from "../lib/charts/Line.svelte";
 
@@ -12,6 +12,22 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let tables = $state<Record<string, boolean>>({});
+  let weekly = $state<any>(null);
+  let writing = $state(false);
+  let weeklyError = $state<string | null>(null);
+  let sentLine = $state(false);
+
+  get("/health/summary").then((r) => (weekly = r.summary)).catch(() => {});
+  async function writeSummary() {
+    writing = true;
+    weeklyError = null;
+    sentLine = false;
+    try { weekly = (await post("/health/summary")).summary; } catch (e: any) { weeklyError = e.message; } finally { writing = false; }
+  }
+  async function useLine() {
+    await put("/insight", { text: weekly.insight_line });
+    sentLine = true;
+  }
 
   function readRange(): number {
     try { return Number(localStorage.getItem("cmf-range")) || 30; } catch { return 30; }
@@ -127,6 +143,25 @@
     </section>
   {/if}
 
+  <section class="card weekly">
+    <header>
+      <h2>This week</h2>
+      <button class="link" onclick={writeSummary} disabled={writing}>{writing ? "Claude is writing…" : weekly ? "Rewrite" : "Write my weekly recap"}</button>
+    </header>
+    {#if weekly}
+      <p class="headline">{weekly.headline}</p>
+      <ul>{#each weekly.observations as o}<li>{o}</li>{/each}</ul>
+      <p class="faint small">
+        Watch line: “{weekly.insight_line}” ·
+        <button class="link" onclick={useLine} disabled={sentLine}>{sentLine ? "on your face after the next sync" : "use on the watch face"}</button>
+        · written {weekly.generated_at.replace("T", " ")} by Claude from daily totals only
+      </p>
+    {:else if !weeklyError}
+      <p class="faint small">Claude reads your daily totals (no minute-by-minute data) and writes a short recap.</p>
+    {/if}
+    {#if weeklyError}<p class="error small">{weeklyError}</p>{/if}
+  </section>
+
   <section class="card">
     <header><h2>Steps per day</h2><button class="link" onclick={() => (tables.steps = !tables.steps)}>{tables.steps ? "Chart" : "Table"}</button></header>
     {#if tables.steps}
@@ -207,6 +242,9 @@
   .two { margin-bottom: 16px; }
   .link { background: none; border: none; color: var(--muted); padding: 2px 4px; font-size: 12px; }
   .link:hover { color: var(--text); }
+  .weekly .headline { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
+  .weekly ul { margin: 0 0 8px; padding-left: 18px; }
+  .weekly li { margin: 2px 0; }
   .daynav { display: flex; gap: 4px; align-items: center; }
   .small { font-size: 12px; margin: 4px 0 8px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
