@@ -2,8 +2,9 @@
 
 Measured from owner photos of calibration faces, rectified with the grid (research/captures/clock-styles/,
 findings 2026-10-26): all styles are round-dot matrix digits; positions are offsets from the INIT2 anchor
-(clock.x, clock.y), measured with the anchor at (80, 120). Glyph shapes for digits not photographed
-(4-9) follow the same 4x6 dot grid and are approximations.
+(clock.x, clock.y). The clock follows its anchor 1:1 and is clipped at the screen edge, not clamped (style 3
+photographed at (20,60), (80,120), (160,220)). Glyph shapes for digits not photographed follow the same 4x6
+dot grid and are approximations.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 # 4 columns x 6 rows; "#" = dot
 GLYPHS: dict[str, list[str]] = {
     "0": [".##.", "#..#", "#..#", "#..#", "#..#", ".##."],
-    "1": ["..#.", ".##.", "..#.", "..#.", "..#.", "..#."],  # stem right of centre, no base (photos)
+    "1": ["..#.", ".##.", "..#.", "..#.", "..#.", "..#."],  # stacked styles: stem right of centre, no base
     "2": [".##.", "#..#", "...#", "..#.", ".#..", "####"],
     "3": ["###.", "...#", ".##.", "...#", "...#", "###."],
     "4": ["#..#", "#..#", "#..#", "####", "...#", "...#"],
@@ -25,6 +26,8 @@ GLYPHS: dict[str, list[str]] = {
     "9": [".##.", "#..#", "#..#", ".###", "...#", ".##."],
     ":": ["....", ".#..", "....", "....", ".#..", "...."],
 }
+# one-row styles draw "1" left-aligned in its slot (style 3 photos at three anchors, 2026-10-26)
+ONE_LEFT = [".#..", "##..", ".#..", ".#..", ".#..", ".#.."]
 
 
 @dataclass(frozen=True)
@@ -38,13 +41,14 @@ class Style:
     date: bool = False  # "MON 26" under the time
     date_size: float = 0
     date_dy: float = 0  # date top relative to the bottom of the digits
+    one_left: bool = False  # "1" sits in the left of its slot (one-row styles)
 
 
 STYLES: dict[int, Style] = {
     0: Style(pitch=20, dot=19, stacked=True, dx=-2, dy=30, line_gap=35),
     1: Style(pitch=16, dot=15, stacked=True, dx=2, dy=20, line_gap=19, date=True, date_size=24, date_dy=59),
-    2: Style(pitch=14, dot=13, stacked=False, dx=23, dy=20),
-    3: Style(pitch=14, dot=13, stacked=False, dx=20, dy=19, date=True, date_size=24, date_dy=70),
+    2: Style(pitch=14, dot=13, stacked=False, dx=20, dy=18, one_left=True),  # mean of 3 anchors
+    3: Style(pitch=14, dot=13, stacked=False, dx=20, dy=19, date=True, date_size=24, date_dy=70, one_left=True),
     4: Style(pitch=22, dot=21, stacked=True, dx=9, dy=24, line_gap=30),
 }
 
@@ -59,8 +63,15 @@ class ClockShape:
 def _place(text: str, x: float, y: float, st: Style, dots: list) -> float:
     """Draw ``text`` with its top-left at (x, y); returns the x after the last glyph."""
     for ch in text:
-        glyph = GLYPHS[ch]
-        width = 1 if ch == ":" else 4
+        if ch == ":":
+            # the colon sits in the gap column right after the hours, and the minutes follow closely
+            # (style 3 photos: colon at hours-start + 138, minutes at + 157)
+            for row in (1, 4):
+                dots.append((x - 0.15 * st.pitch, y + row * st.pitch + st.pitch / 2, st.dot / 2))
+            x += 1.2 * st.pitch
+            continue
+        glyph = ONE_LEFT if ch == "1" and st.one_left else GLYPHS[ch]
+        width = 4
         for row, line in enumerate(glyph):
             for col, cell in enumerate(line):
                 if cell == "#":

@@ -206,3 +206,16 @@ def test_clock_styles_match_measured_footprints():
     assert clock.shape(1, 80, 120).date and not clock.shape(0, 80, 120).date
     moved = clock.shape(2, 180, 220).box
     assert moved[0] - clock.shape(2, 80, 120).box[0] == 100  # follows the anchor (assumption, see findings)
+
+
+def test_style3_matches_three_photographed_anchors():
+    """Style 3 at (20,60), (80,120), (160,220): digits start at anchor + ~(20, 18) (findings 2026-10-26)."""
+    from cmfstudio.render import clock
+
+    for (ax, ay), (x0, y0) in {(20, 60): (39, 76), (80, 120): (103, 140), (160, 220): (180, 240)}.items():
+        box = clock.shape(2, ax, ay).box
+        assert abs(box[0] - x0) <= 6 and abs(box[1] - y0) <= 6, ((ax, ay), box)
+        assert abs((box[2] - box[0]) - 290) <= 8
+    # one-row styles left-align "1": its first dot is in the slot's first column
+    xs = [cx for cx, cy, r in clock.shape(2, 0, 0, __import__("datetime").datetime(2026, 1, 1, 11, 27)).dots]
+    assert min(xs) < 20 + 14
