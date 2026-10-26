@@ -47,6 +47,9 @@ the watch screens by the owner: identical. **Deferred:** buffer length (leave th
 - [x] Re-sync is idempotent (no duplicate samples) (upsert on (metric, ts) + watch-side cursor; verified on device 2026-10-25)
 
 ## Phase 3 — Face pipeline · ~1 weekend
+**Status: DONE 2026-10-26.** Photo-dial faces from JSON specs render, install and refresh hourly on the real watch
+(`cmf face preview|use|list`, `cmf insight`; example `faces/deco-steps.json`). Optional extension, not yet started:
+structured-dial re-skins for up to 7 custom faces with native live fields (docs/06 "Next").
 See `06-studio-design-pipeline.md`.
 - [x] Face spec format (JSON) + HTML template renderer (`render/spec.py`, `render/html.py`)
 - [x] Playwright render → 466×466 PNG → RGB565 with dithering → cmfkit encoder (installed on the watch 2026-10-26)
