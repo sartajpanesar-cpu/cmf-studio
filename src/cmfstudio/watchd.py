@@ -23,6 +23,7 @@ from .ble.keys import KeychainKeyStore, MemoryKeyStore
 from .ble.link import WatchLink
 from .core.jobs import JobQueue
 from .core.power import WakeWatcher
+from .core.rules import RulesEngine
 from .core.scheduler import SyncScheduler
 from .render.service import FaceService
 from .store.db import Store
@@ -83,14 +84,13 @@ async def serve(args: argparse.Namespace) -> None:
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
     faces = FaceService(store, link, queue, APP_DIR / "faces")
 
-    def after_job(job) -> None:
-        if job.kind == "sync" and job.state == "done":
-            refresh = asyncio.ensure_future(faces.refresh_after_sync())
-            refresh.add_done_callback(lambda t: t.exception() and log.warning("face refresh failed: %r", t.exception()))
-
-    queue.on_done.append(after_job)
+    rules = RulesEngine(store, queue, APP_DIR / "rules.json", faces.refresh_after_sync, link.status)
+    if rules.error:
+        log.warning("rules: %s (using defaults)", rules.error)
+    link.subscribe(rules.on_link_event)
+    queue.on_done.append(rules.on_job_done)
     ui_dir = Path(__file__).resolve().parents[2] / "ui" / "dist"  # built by `cd ui && npm run build`
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir)
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:
@@ -109,6 +109,7 @@ async def serve(args: argparse.Namespace) -> None:
         sync_task.cancel()
         await link.stop()
         await queue.stop()
+        await rules.close()
         await asyncio.wait_for(link_task, 10)
         store.close()
 

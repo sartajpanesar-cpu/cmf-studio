@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core.jobs import JobQueue
+from ..core.rules import RulesEngine
 from ..render import clock, describe
 from ..render import html as render_html
 from ..render.service import FaceService
@@ -81,6 +82,7 @@ def create_app(
     sync: SyncManager | None = None,
     faces: FaceService | None = None,
     ui_dir: Path | None = None,
+    rules: RulesEngine | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -318,6 +320,19 @@ def create_app(
     @app.get("/events", dependencies=[Depends(auth)])
     async def get_events(limit: int = Query(100, ge=1, le=1000), kind: str | None = None) -> list[dict[str, Any]]:
         return store.events(limit, kind)
+
+    @app.get("/rules", dependencies=[Depends(auth)])
+    async def get_rules() -> dict[str, Any]:
+        if rules is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "rules engine not running")
+        return rules.describe()
+
+    @app.post("/rules/reload", dependencies=[Depends(auth)])
+    async def reload_rules() -> dict[str, Any]:
+        """Re-read rules.json (the owner edits it by hand; there is deliberately no API to write rules)."""
+        if rules is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "rules engine not running")
+        return rules.reload()
 
     if ui_dir is not None and (ui_dir / "index.html").exists():
         # the built Svelte app: static, no secrets; it gets the token from `cmf ui` (URL fragment)

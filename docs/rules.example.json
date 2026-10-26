@@ -1,0 +1,10 @@
+{
+  "rules": [
+    {"on": "sync", "do": [{"action": "refresh_face"}]},
+    {"on": "button", "button": "play_pause",
+     "do": [{"action": "notify", "title": "Today", "body": "{steps} steps · {km} km · RHR {hr_resting} · sleep {sleep} · {battery}%"}]},
+    {"on": "button", "button": "next", "cooldown_s": 30, "do": [{"action": "sync"}]},
+    {"on": "job", "kind": "install_face", "state": "failed",
+     "do": [{"action": "notify", "title": "Face install failed", "body": "{error}"}]}
+  ]
+}
