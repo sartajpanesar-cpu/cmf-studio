@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from cmfkit.transport.sim import SimWatch
 
 from cmfstudio.ble.keys import MemoryKeyStore
 from cmfstudio.ble.link import LinkState, WatchLink
+from cmfstudio.sync import parsers
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -29,6 +31,11 @@ class FlakySim(SimWatch):
         self.connects = 0
         self.reachable = True
         self._on_disconnect: Callable[[], None] | None = None
+        # health sync emulation (docs/protocol-sync.md): frames sent after ACTIVITY_FETCH_2
+        self.health_frames: list[tuple] = []
+        self.fetch_ready_code = 0x01
+        self.send_finish = True
+        self.since_ts = 1_761_300_000
 
     def set_disconnect_handler(self, handler: Callable[[], None]) -> None:
         self._on_disconnect = handler
@@ -53,6 +60,16 @@ class FlakySim(SimWatch):
         # Mirror the real Pro 2 (fw 1.0.0.57, research/logs/probe-1.log): BATTERY requests are never
         # answered; each TIME is followed by an unsolicited BATTERY push.
         if msg.op == ops.BATTERY:
+            return
+        if msg.op == parsers.ACTIVITY_FETCH_1:
+            self._reply(parsers.ACTIVITY_FETCH_ACK_1, bytes([self.fetch_ready_code]))
+            return
+        if msg.op == parsers.ACTIVITY_FETCH_2:
+            self._reply(parsers.ACTIVITY_FETCH_ACK_2, struct.pack("<I", self.since_ts) + b"\x00\x00\x00\x01")
+            for op, payload in self.health_frames:
+                self._reply(op, payload)
+            if self.send_finish:
+                self._reply(parsers.ACTIVITY_FETCH_ACK_1, b"\x02")
             return
         super()._dispatch(msg)
         if msg.op == ops.TIME:

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import struct
 
 import httpx
 import pytest
@@ -9,6 +10,8 @@ from cmfstudio.api.app import create_app
 from cmfstudio.ble.link import LinkState
 from cmfstudio.core.jobs import JobQueue
 from cmfstudio.store.db import Store
+from cmfstudio.sync import parsers as p
+from cmfstudio.sync.manager import SyncManager
 
 from .conftest import wait_state
 
@@ -27,7 +30,9 @@ async def api(start_link, tmp_path):
     """(client, link, store) for a not-yet-paired sim watch behind the API."""
     link = start_link()
     store = Store(":memory:")
-    queue = JobQueue(store, link, retry_s=0.01)
+    sync = SyncManager(store, idle_s=0.3)
+    sync.attach(link)
+    queue = JobQueue(store, link, retry_s=0.01, handlers={"sync": lambda lk, _a: sync.fetch(lk)})
     queue.start()
     app = create_app(link, queue, store, TOKEN, tmp_path / "faces")
     transport = httpx.ASGITransport(app=app)
@@ -115,3 +120,14 @@ async def test_pair_requires_confirm_and_refuses_when_connected(paired_api):
     client, *_ = paired_api
     assert (await client.post("/pair", headers=AUTH)).status_code == 400
     assert (await client.post("/pair", params={"confirm": True}, headers=AUTH)).status_code == 409
+
+
+async def test_sync_endpoint_and_samples(paired_api, watch):
+    client, *_ = paired_api
+    watch.health_frames = [(p.HEART_RATE, struct.pack("<II", 1_761_400_000, 66))]
+    job = (await client.post("/sync", headers=AUTH)).json()
+    assert job["state"] == "done" and job["result"]["new_samples"] == {"hr": 1}
+    r = (await client.get("/samples", params={"metric": "hr"}, headers=AUTH)).json()
+    assert r["samples"] == [[1_761_400_000, 66.0]]
+    summ = (await client.get("/samples/summary", headers=AUTH)).json()
+    assert summ["metrics"]["hr"]["count"] == 1 and summ["raw_frames"] == 1

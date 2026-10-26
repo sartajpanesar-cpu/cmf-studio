@@ -122,6 +122,60 @@ class Store:
         rows = self.db.execute(sql, (kind, limit) if kind else (limit,)).fetchall()
         return [{"id": r["id"], "ts": r["ts"], "kind": r["kind"], "data": json.loads(r["data_json"])} for r in rows]
 
+    # -- health data ------------------------------------------------------------
+
+    def add_raw_frame(self, opcode: str, payload: bytes, parser_version: int | None) -> int:
+        cur = self.db.execute(
+            "INSERT INTO raw_frames(received_at, opcode, payload_hex, parser_version) VALUES (?, ?, ?, ?)",
+            (time.time(), opcode, payload.hex(), parser_version),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+    def upsert_samples(self, samples: list[Any], source_frame_id: int | None) -> int:
+        """Insert-or-update on (metric, ts), so re-syncing the same data never duplicates. Returns new rows."""
+        self.db.execute("BEGIN")
+        try:
+            new = 0
+            for s in samples:
+                exists = self.db.execute(
+                    "SELECT 1 FROM samples WHERE metric = ? AND ts = ?", (s.metric, s.ts)
+                ).fetchone()
+                self.db.execute(
+                    "INSERT INTO samples(metric, ts, value, source_frame_id) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(metric, ts) DO UPDATE SET "
+                    "value = excluded.value, source_frame_id = excluded.source_frame_id",
+                    (s.metric, s.ts, s.value, source_frame_id),
+                )
+                new += exists is None
+            self.db.execute("COMMIT")
+        except Exception:
+            self.db.execute("ROLLBACK")
+            raise
+        return new
+
+    def upsert_sleep(self, session: Any, source_frame_id: int | None) -> None:
+        stages = {
+            "totals_s": session.totals_s,
+            "unknown": session.unknown,
+            "stages": [[st.ts, st.duration_s, st.stage] for st in session.stages],
+        }
+        self.db.execute(
+            "INSERT INTO sleep_sessions(start_ts, end_ts, stages_json, source_frame_id) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(start_ts) DO UPDATE SET end_ts = excluded.end_ts, stages_json = excluded.stages_json, "
+            "source_frame_id = excluded.source_frame_id",
+            (session.start_ts, session.end_ts, json.dumps(stages), source_frame_id),
+        )
+
+    def samples(self, metric: str, start: int = 0, end: int = 2**31) -> list[tuple[int, float]]:
+        rows = self.db.execute(
+            "SELECT ts, value FROM samples WHERE metric = ? AND ts BETWEEN ? AND ? ORDER BY ts", (metric, start, end)
+        )
+        return [(r["ts"], r["value"]) for r in rows]
+
+    def sample_counts(self) -> dict[str, int]:
+        rows = self.db.execute("SELECT metric, count(*) AS n FROM samples GROUP BY metric")
+        return {r["metric"]: r["n"] for r in rows}
+
     # -- jobs -------------------------------------------------------------------
 
     def add_job(self, kind: str, args: dict[str, Any], not_after: float | None = None) -> Job:

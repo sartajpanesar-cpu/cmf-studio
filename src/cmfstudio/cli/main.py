@@ -101,6 +101,29 @@ def cmd_pair(c: Client, a: argparse.Namespace) -> None:
     print(f"paired; watch is {res['link']['state']}")
 
 
+def cmd_sync(c: Client, _a: argparse.Namespace) -> None:
+    print("syncing health data from the watch (can take a few minutes)...")
+    show_job(c.call("POST", "/sync"))
+
+
+def cmd_samples(c: Client, a: argparse.Namespace) -> None:
+    if not a.metric:
+        summ = c.call("GET", "/samples/summary")
+        for metric, m in sorted(summ["metrics"].items()):
+            print(f"{metric:<18} {m['count']:>7}  {dts(m['first'])} .. {dts(m['last'])}")
+        sl = summ["sleep_sessions"]
+        print(f"{'sleep sessions':<18} {sl['count']:>7}  {dts(sl['first'])} .. {dts(sl['last'])}")
+        print(f"{'raw frames':<18} {summ['raw_frames']:>7}")
+        return
+    start = int(dt.datetime.now().timestamp()) - int(a.hours * 3600)
+    for t, v in c.call("GET", "/samples", params={"metric": a.metric, "start": start})["samples"]:
+        print(f"{dts(t)}  {v:g}")
+
+
+def dts(t: float | None) -> str:
+    return dt.datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M") if t else "-"
+
+
 def cmd_jobs(c: Client, a: argparse.Namespace) -> None:
     for job in reversed(c.call("GET", "/jobs", params={"limit": a.limit})):
         print(f"{ts(job['created_at'])}  ", end="")
@@ -144,6 +167,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("pair", help="pair this Mac with the watch (after Nothing X has used it)")
     s.add_argument("-y", "--yes", action="store_true")
     s.set_defaults(func=cmd_pair)
+
+    sub.add_parser("sync", help="fetch health data from the watch").set_defaults(func=cmd_sync)
+
+    s = sub.add_parser("samples", help="stored health data: summary, or one metric's recent values")
+    s.add_argument("metric", nargs="?", help="e.g. hr, steps_cum, spo2, stress, hr_resting")
+    s.add_argument("--hours", type=float, default=24)
+    s.set_defaults(func=cmd_samples)
 
     s = sub.add_parser("jobs", help="recent jobs")
     s.add_argument("--limit", type=int, default=20)

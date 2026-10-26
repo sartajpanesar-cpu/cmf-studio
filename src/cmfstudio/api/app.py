@@ -114,6 +114,34 @@ def create_app(link: WatchLink, queue: JobQueue, store: Store, token: str, faces
             await asyncio.wait_for(link.connected.wait(), 15)
         return {"paired": True, "link": link.status()}
 
+    @app.post("/sync", dependencies=[Depends(auth)])
+    async def post_sync(wait: bool = True) -> dict[str, Any]:
+        """Fetch health data from the watch (ACTIVITY_FETCH). Read-only on the watch side."""
+        job = queue.submit("sync", {}, ttl_s=6 * 3600)
+        if wait and link.connected.is_set():
+            try:
+                job = await queue.wait(job.id, 660)  # a heavy sync can take minutes (spec: ~160 s)
+            except TimeoutError:
+                job = store.get_job(job.id)
+        return job.public()
+
+    @app.get("/samples", dependencies=[Depends(auth)])
+    async def get_samples(
+        metric: str, start: int = 0, end: int = 2**31 - 1, limit: int = Query(5000, ge=1, le=100_000)
+    ) -> dict[str, Any]:
+        rows = store.samples(metric, start, end)[-limit:]
+        return {"metric": metric, "samples": rows}
+
+    @app.get("/samples/summary", dependencies=[Depends(auth)])
+    async def get_samples_summary() -> dict[str, Any]:
+        rows = store.db.execute("SELECT metric, count(*) n, min(ts) first, max(ts) last FROM samples GROUP BY metric")
+        sleep = store.db.execute("SELECT count(*), min(start_ts), max(end_ts) FROM sleep_sessions").fetchone()
+        return {
+            "metrics": {r["metric"]: {"count": r["n"], "first": r["first"], "last": r["last"]} for r in rows},
+            "sleep_sessions": {"count": sleep[0], "first": sleep[1], "last": sleep[2]},
+            "raw_frames": store.db.execute("SELECT count(*) FROM raw_frames").fetchone()[0],
+        }
+
     @app.get("/jobs", dependencies=[Depends(auth)])
     async def get_jobs(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
         return [j.public() for j in store.recent_jobs(limit)]

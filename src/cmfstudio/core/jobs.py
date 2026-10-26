@@ -57,8 +57,17 @@ TERMINAL = ("done", "failed", "expired")
 
 
 class JobQueue:
-    def __init__(self, store: Store, link: WatchLink, *, max_attempts: int = 3, retry_s: float = 5.0) -> None:
+    def __init__(
+        self,
+        store: Store,
+        link: WatchLink,
+        *,
+        max_attempts: int = 3,
+        retry_s: float = 5.0,
+        handlers: dict[str, Handler] | None = None,
+    ) -> None:
         self.store = store
+        self._extra = handlers or {}
         self.link = link
         self.max_attempts = max_attempts
         self.retry_s = retry_s
@@ -81,7 +90,7 @@ class JobQueue:
                 await self._task
 
     def submit(self, kind: str, args: dict[str, Any], ttl_s: float | None = None) -> Job:
-        if kind not in HANDLERS:
+        if self._handler(kind) is None:
             raise ValueError(f"unknown job kind {kind!r}")
         job = self.store.add_job(kind, args, not_after=time.time() + ttl_s if ttl_s else None)
         self._queue.append(job.id)
@@ -95,6 +104,9 @@ class JobQueue:
         fut: asyncio.Future[Job] = asyncio.get_running_loop().create_future()
         self._waiters.setdefault(job_id, []).append(fut)
         return await asyncio.wait_for(fut, timeout)
+
+    def _handler(self, kind: str) -> Handler | None:
+        return self._extra.get(kind) or HANDLERS.get(kind)
 
     def pending(self) -> int:
         return len(self._queue)
@@ -122,7 +134,9 @@ class JobQueue:
             attempts = job.attempts + 1
             self.store.update_job(job.id, state="running", attempts=attempts)
             try:
-                result = await HANDLERS[job.kind](self.link, job.args)
+                handler = self._handler(job.kind)
+                assert handler is not None
+                result = await handler(self.link, job.args)
             except (NotConnectedError, ConnectionError) as exc:
                 # watch went away mid-job: not the job's fault, don't count the attempt. Pause briefly
                 # so the supervisor can notice the drop and clear link.connected.

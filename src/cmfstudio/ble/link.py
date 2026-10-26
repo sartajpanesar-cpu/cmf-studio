@@ -128,11 +128,16 @@ class WatchLink:
         self._attempt = 0
         self._stopping = False
         self._listeners: list[Callable[[Event], None]] = []
+        self._hooks: list[Callable[[Message], bool]] = []
 
     # -- events ---------------------------------------------------------------
 
     def subscribe(self, listener: Callable[[Event], None]) -> None:
         self._listeners.append(listener)
+
+    def add_message_hook(self, hook: Callable[[Message], bool]) -> None:
+        """Raw watch->Mac messages not claimed by a pending request; return True to consume one."""
+        self._hooks.append(hook)
 
     def _emit(self, kind: str, **data: Any) -> None:
         event = {"kind": kind, "ts": time.time(), **data}
@@ -275,6 +280,12 @@ class WatchLink:
         log.debug("raw %s %s", channel.value, data.hex())
 
     def _on_message(self, msg: Message) -> None:
+        for hook in self._hooks:
+            try:
+                if hook(msg):
+                    return
+            except Exception:
+                log.exception("message hook failed for %s", ops.name_of(msg.op))
         if msg.op == ops.MUSIC_BUTTON:
             event = buttons.decode(msg.payload)
             self._emit("button", name=event.name, raw=event.raw.hex())
@@ -293,6 +304,12 @@ class WatchLink:
             if self._session is None:
                 raise NotConnectedError("watch disconnected")
             yield self._session
+
+    @contextlib.asynccontextmanager
+    async def exclusive(self) -> AsyncIterator[StudioSession]:
+        """Hold the link for a multi-step exchange (e.g. a health sync); keepalives wait meanwhile."""
+        async with self._op() as s:
+            yield s
 
     async def info(self) -> dict[str, Any]:
         async with self._op() as s:

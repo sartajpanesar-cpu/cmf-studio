@@ -24,6 +24,7 @@ from .ble.link import WatchLink
 from .core.jobs import JobQueue
 from .core.power import WakeWatcher
 from .store.db import Store
+from .sync.manager import SyncManager
 
 APP_DIR = Path.home() / "Library" / "Application Support" / "cmf-studio"
 CONFIG = APP_DIR / "config.json"
@@ -75,7 +76,9 @@ async def serve(args: argparse.Namespace) -> None:
     link.subscribe(
         lambda e: store.add_event(e["kind"], {k: v for k, v in e.items() if k not in ("kind", "ts")}, e["ts"])
     )
-    queue = JobQueue(store, link)
+    sync = SyncManager(store)
+    sync.attach(link)
+    queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
     app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces")
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
