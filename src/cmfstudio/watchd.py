@@ -25,6 +25,7 @@ from .core.jobs import JobQueue
 from .core.power import WakeWatcher
 from .core.rules import RulesEngine
 from .core.scheduler import SyncScheduler
+from .core.weather import WeatherService
 from .render.native_service import NativeService
 from .render.service import FaceService
 from .store.db import Store
@@ -85,6 +86,7 @@ async def serve(args: argparse.Namespace) -> None:
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
     faces = FaceService(store, link, queue, APP_DIR / "faces")
     native = NativeService(store, link, queue, APP_DIR / "faces", faces)
+    weather = WeatherService(store, queue)
 
     rules = RulesEngine(store, queue, APP_DIR / "rules.json", faces.refresh_after_sync, link.status)
     if rules.error:
@@ -92,7 +94,7 @@ async def serve(args: argparse.Namespace) -> None:
     link.subscribe(rules.on_link_event)
     queue.on_done.append(rules.on_job_done)
     ui_dir = Path(__file__).resolve().parents[2] / "ui" / "dist"  # built by `cd ui && npm run build`
-    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules, native)
+    app = create_app(link, queue, store, ensure_token(), APP_DIR / "faces", sync, faces, ui_dir, rules, native, weather)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning"))
 
     def on_wake(slept_s: float) -> None:
@@ -103,12 +105,14 @@ async def serve(args: argparse.Namespace) -> None:
     link_task = asyncio.create_task(link.run(), name="link")
     wake_task = asyncio.create_task(WakeWatcher(on_wake).run(), name="wake")
     sync_task = asyncio.create_task(SyncScheduler(queue, link, interval_s=args.sync_every * 60).run(), name="sync")
+    weather_task = asyncio.create_task(weather.run(link), name="weather")
     log.info("watchd up: %s, api http://127.0.0.1:%d, db %s", address, args.port, db_path)
     try:
         await server.serve()  # returns on SIGINT/SIGTERM
     finally:
         wake_task.cancel()
         sync_task.cancel()
+        weather_task.cancel()
         await link.stop()
         await queue.stop()
         await rules.close()

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { get, post } from "../lib/api";
+  import WeatherCard from "../lib/WeatherCard.svelte";
 
   let { status, onchange }: { status: any; onchange: () => void } = $props();
   let jobs = $state<any[]>([]);
@@ -60,6 +61,8 @@
     <label>Body <input bind:value={body} maxlength="128" /></label>
     <button disabled={!!busy || !title} onclick={() => run("Notify", () => post("/notify", { title, body }))}>Send</button>
   </section>
+
+  <WeatherCard />
 
   <section class="card wide">
     <h2>Recent activity</h2>

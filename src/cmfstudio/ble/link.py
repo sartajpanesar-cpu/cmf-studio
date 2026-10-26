@@ -409,6 +409,13 @@ class WatchLink:
             except TimeoutError:
                 return False
 
+    async def set_weather(self, payload: bytes) -> None:
+        """WEATHER_SET_1 (FFFF:906B); the watch sends no reply (spec §9, Gadgetbridge)."""
+        if len(payload) != 199:
+            raise ValueError(f"weather payload must be 199 bytes, got {len(payload)}")
+        async with self._op() as s:
+            await s.send(ops.WEATHER_SET, payload)
+
     async def set_music(self, track: str, artist: str, state: int = pl.MUSIC_PLAYING) -> None:
         async with self._op() as s:
             await s.set_music(track, artist, state)

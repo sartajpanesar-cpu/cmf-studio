@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+import httpx
 from cmfkit.watchface import photo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -31,6 +32,7 @@ from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core.jobs import JobQueue
 from ..core.rules import RulesEngine
+from ..core.weather import WeatherService, WeatherSettings, geocode
 from ..render import clock, describe, native_face
 from ..render import html as render_html
 from ..render.native import NativeFormatError
@@ -87,6 +89,7 @@ def create_app(
     ui_dir: Path | None = None,
     rules: RulesEngine | None = None,
     native: NativeService | None = None,
+    weather: WeatherService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -377,6 +380,39 @@ def create_app(
     @app.get("/watch/dials", dependencies=[Depends(auth)])
     async def get_watch_dials() -> dict[str, Any]:
         return need_native().dials()
+
+    # -- weather + glance line -------------------------------------------------------------------------------
+
+    def need_weather() -> WeatherService:
+        if weather is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "weather not configured")
+        return weather
+
+    @app.get("/weather", dependencies=[Depends(auth)])
+    async def get_weather() -> dict[str, Any]:
+        w = need_weather()
+        return {"settings": w.settings().model_dump(), "last": w.last(), "error": w.last_error}
+
+    @app.put("/weather/settings", dependencies=[Depends(auth)])
+    async def put_weather_settings(settings: WeatherSettings) -> dict[str, Any]:
+        return need_weather().save(settings).model_dump()
+
+    @app.get("/weather/places", dependencies=[Depends(auth)])
+    async def get_weather_places(q: str = Query(min_length=2, max_length=80)) -> list[dict[str, Any]]:
+        try:
+            async with need_weather().client_factory() as client:
+                return await geocode(client, q)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"place search failed: {exc!r}") from exc
+
+    @app.post("/weather/push", dependencies=[Depends(auth)])
+    async def post_weather_push() -> dict[str, Any]:
+        try:
+            return await need_weather().push()
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"forecast fetch failed: {exc!r}") from exc
 
     @app.get("/rules", dependencies=[Depends(auth)])
     async def get_rules() -> dict[str, Any]:

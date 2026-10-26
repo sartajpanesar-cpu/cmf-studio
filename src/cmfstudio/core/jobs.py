@@ -61,12 +61,17 @@ async def _install_native(link: WatchLink, a: dict[str, Any]) -> dict[str, Any]:
     return {"activated": True, "dial_id": a["new_id"], "replaced": a["old_id"]}
 
 
+async def _weather(link: WatchLink, a: dict[str, Any]) -> None:
+    await link.set_weather(bytes.fromhex(a["payload"]))
+
+
 HANDLERS: dict[str, Handler] = {
     "notify": _notify,
     "info": _info,
     "set_music": _set_music,
     "install_face": _install_face,
     "install_native": _install_native,
+    "weather": _weather,
 }
 
 TERMINAL = ("done", "failed", "expired")
