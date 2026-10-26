@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core.jobs import JobQueue
-from ..render import describe
+from ..render import clock, describe
 from ..render import html as render_html
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
@@ -151,7 +151,12 @@ def create_app(
     @app.post("/faces/html", dependencies=[Depends(auth)])
     async def post_face_html(spec: FaceSpec) -> dict[str, Any]:
         """The spec as HTML with today's data, for an instant in-browser preview (exact render: /faces/preview)."""
-        return {"html": render_html.build(spec, need_faces().context())}
+        c = spec.clock
+        return {
+            "html": render_html.build(spec, need_faces().context()),
+            "clock_svg": clock.svg(c.style, c.x, c.y, c.color),
+            "clock_box": clock.shape(c.style, c.x, c.y).box,
+        }
 
     @app.get("/faces", dependencies=[Depends(auth)])
     async def get_faces() -> dict[str, Any]:

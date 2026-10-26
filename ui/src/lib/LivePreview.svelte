@@ -1,13 +1,14 @@
 <script lang="ts">
   // Instant face preview: the spec's HTML (from watchd, same builder as the exact render) in two
   // double-buffered iframes, scaled into a round bezel. A pointer layer on top drags layers / the clock.
-  import { SIZE, type Clock } from "./face";
+  import { SIZE } from "./face";
   import ClockOverlay from "./ClockOverlay.svelte";
 
   let {
-    html, exactPng = null, mode = "live", clock, onpoint,
+    html, exactPng = null, mode = "live", clockSvg = "", clockBox = null, onpoint,
   }: {
-    html: string; exactPng?: string | null; mode?: "live" | "exact"; clock: Clock;
+    html: string; exactPng?: string | null; mode?: "live" | "exact"; clockSvg?: string;
+    clockBox?: [number, number, number, number] | null;
     onpoint: (x: number, y: number, phase: "start" | "move" | "end", onClock: boolean) => void;
   } = $props();
 
@@ -35,7 +36,7 @@
   }
   function down(e: PointerEvent) {
     const [x, y] = toFace(e);
-    dragClock = x >= clock.x - 6 && x <= clock.x + 156 && y >= clock.y - 6 && y <= clock.y + 66;
+    dragClock = !!clockBox && x >= clockBox[0] - 6 && x <= clockBox[2] + 6 && y >= clockBox[1] - 6 && y <= clockBox[3] + 6;
     dragging = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     onpoint(x, y, "start", dragClock);
@@ -65,7 +66,7 @@
         ></iframe>
       {/each}
     {/if}
-    <ClockOverlay {clock} {scale} />
+    {#if mode === "live" && clockSvg}<ClockOverlay svg={clockSvg} {scale} />{/if}
     <div class="hit" role="presentation" onpointerdown={down} onpointermove={move} onpointerup={up}></div>
   </div>
 </div>

@@ -192,3 +192,17 @@ def test_unloaded_font_falls_back_identically(tmp_path):
     a = np.asarray(asyncio.run(render(plain, CTX, tmp_path)).watch).astype(int)
     b = np.asarray(asyncio.run(render(missing, CTX, tmp_path)).watch).astype(int)
     assert (np.abs(a - b).sum(axis=-1) > 60).mean() < 0.0005
+
+
+def test_clock_styles_match_measured_footprints():
+    """Footprints measured from owner photos with the anchor at (80, 120) (findings 2026-10-26), ±12 px."""
+    from cmfstudio.render import clock
+
+    measured = {0: (78, 150, 258, 420), 1: (82, 140, 219, 410), 2: (103, 140, 393, 230), 3: (86, 139, 390, 294),
+                4: (89, 144, 284, 424)}  # fmt: skip
+    for style, box in measured.items():
+        got = clock.shape(style, 80, 120).box
+        assert all(abs(a - b) <= 16 for a, b in zip(got, box, strict=True)), (style, got, box)
+    assert clock.shape(1, 80, 120).date and not clock.shape(0, 80, 120).date
+    moved = clock.shape(2, 180, 220).box
+    assert moved[0] - clock.shape(2, 80, 120).box[0] == 100  # follows the anchor (assumption, see findings)

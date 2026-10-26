@@ -59,6 +59,8 @@
   let timer: ReturnType<typeof setTimeout> | undefined;
   let liveTimer: ReturnType<typeof setTimeout> | undefined;
   let liveHtml = $state("");
+  let clockSvg = $state("");
+  let clockBox = $state<[number, number, number, number] | null>(null);
   let mode = $state<"live" | "exact">("live");
   $effect(() => {
     const snapshot = JSON.stringify(spec); // tracks every nested change
@@ -73,7 +75,7 @@
     const mine = ++liveSeq;
     try {
       const r = await post("/faces/html", withFonts(s));
-      if (mine === liveSeq) { liveHtml = r.html; error = null; }
+      if (mine === liveSeq) { liveHtml = r.html; clockSvg = r.clock_svg; clockBox = r.clock_box; error = null; }
     } catch (e: any) {
       if (mine === liveSeq) error = e.message;
     }
@@ -260,7 +262,7 @@
       <button class:on={mode === "live"} onclick={() => (mode = "live")}>Live</button>
       <button class:on={mode === "exact"} onclick={() => (mode = "exact")} disabled={!preview}>Exact watch render</button>
     </div>
-    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} clock={spec.clock} onpoint={point} />
+    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} {clockSvg} {clockBox} onpoint={point} />
     <p class="faint small center-text">
       Drag to move the selected layer or the clock ·
       {#if rendering}checking exact render…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB · {Math.round(preview.checks.lit_fraction * 100)}% lit{/if}

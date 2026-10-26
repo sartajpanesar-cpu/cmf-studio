@@ -88,10 +88,16 @@ def preview(watch_img: Image.Image, clock: Clock | None = None) -> bytes:
     draw = ImageDraw.Draw(img, "RGBA")
     draw.ellipse((0, 0, SIZE - 1, SIZE - 1), outline=(80, 80, 80, 255), width=1)
     if clock is not None:
-        # the firmware clock's exact footprint isn't known; mark its anchor
-        x, y = clock.x, clock.y
-        draw.rectangle((x, y, x + 150, y + 60), outline=(255, 255, 255, 90), width=1)
-        draw.text((x + 4, y + 4), "clock", fill=(255, 255, 255, 140))
+        # the firmware draws the live clock over the dial; show its measured style (preview only, not sent)
+        from . import clock as clock_styles
+
+        rgb = tuple(int(clock.color[i : i + 2], 16) for i in (1, 3, 5))
+        shape = clock_styles.shape(clock.style, clock.x, clock.y)
+        for cx, cy, r in shape.dots:
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*rgb, 255))
+        if shape.date:
+            cx, top, size, text = shape.date
+            draw.text((cx, top + size / 2), text, fill=(*rgb, 255), anchor="mm", font_size=size * 0.8)
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
