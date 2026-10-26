@@ -1,0 +1,426 @@
+"""Watch settings: read with ``*_GET`` (the watch answers on the SET opcode with the current value, spec §4.4),
+write with ``*_SET`` (acknowledged on cmd2 = 0x0003).
+
+What the Pro 2 (fw 1.0.0.57) actually returns was probed on 2026-10-26 (research/findings.md): GET replies are
+little-endian structs, while the refs write alarms and goals big-endian. So every write here is **verified by
+reading it back**; where the write encoding is uncertain we try the documented one first, then the watch's own read
+format, remember whichever the watch accepted (kv ``settings_encoding``), and restore the old value if neither did.
+Settings without a GET (health monitoring, HR alerts, units) are write-only and report only the watch's ack.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import struct
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+from cmfkit.protocol.opcodes import Op
+from pydantic import BaseModel, Field, field_validator
+
+from ..ble.link import WatchLink
+from ..store.db import Store
+
+GET, SET, ACK = 0x0002, 0x0001, 0x0003
+
+# "group" settings: GET 0002 / SET 0001 / ACK 0003 on one cmd1
+GROUPS: dict[str, int] = {
+    "alarms": 0x0063,
+    "goals": 0x005E,
+    "time_format": 0x005F,
+    "standing_reminder": 0x0060,
+    "water_reminder": 0x0061,
+    "wrist_raise": 0x0062,
+    "user_info": 0x0095,
+    "dnd": 0x0099,
+    "health_monitoring": 0x009B,
+    "contacts": 0x00D5,
+    "sports": 0x00DC,
+}
+HR_ALERTS = Op(0xFFFF, 0x9059)
+UNIT_LENGTH, UNIT_LENGTH_ACK = Op(0xFFFF, 0x9067), Op(0xFFFF, 0xA067)
+UNIT_TEMPERATURE, UNIT_TEMPERATURE_ACK = Op(0xFFFF, 0x9068), Op(0xFFFF, 0xA068)
+MONITOR_KINDS = {"heart_rate": 0x01, "spo2": 0x02, "stress": 0x04}
+
+DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # repetition bitmask, bit 0 = Monday (Gadgetbridge)
+MAX_ALARMS = 10
+ALARM_SIZE = 40
+ENCODING_KEY = "settings_encoding"
+
+
+class SettingsError(RuntimeError):
+    pass
+
+
+# -- alarms ---------------------------------------------------------------------------------------------------------
+
+
+class Alarm(BaseModel):
+    time: str = Field(description="HH:MM, 24-hour")
+    enabled: bool = True
+    days: list[str] = Field(default_factory=list, description="mon..sun; empty = one-time")
+    label: str = Field("", max_length=32)
+
+    @field_validator("time")
+    @classmethod
+    def _time(cls, v: str) -> str:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", v)
+        if not m or int(m[1]) > 23 or int(m[2]) > 59:
+            raise ValueError("time must be HH:MM (24-hour)")
+        return f"{int(m[1]):02d}:{m[2]}"
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v: list[str]) -> list[str]:
+        bad = [d for d in v if d not in DAYS]
+        if bad:
+            raise ValueError(f"days must be among {DAYS}")
+        return [d for d in DAYS if d in v]
+
+    @property
+    def seconds(self) -> int:
+        h, m = self.time.split(":")
+        return int(h) * 3600 + int(m) * 60
+
+    @property
+    def mask(self) -> int:
+        return sum(1 << DAYS.index(d) for d in self.days)
+
+
+def parse_alarms(raw: bytes) -> list[Alarm]:
+    out = []
+    for i in range(0, len(raw) - ALARM_SIZE + 1, ALARM_SIZE):
+        rec = raw[i : i + ALARM_SIZE]
+        seconds = struct.unpack_from("<I", rec)[0]  # the watch's own (read) format is little-endian
+        if seconds >= 86400:
+            continue  # not a time the watch can show: skip rather than guess
+        label = rec[8:40].split(b"\0", 1)[0].decode("utf-8", "replace")
+        days = [d for b, d in enumerate(DAYS) if rec[6] & (1 << b)]
+        out.append(
+            Alarm(
+                time=f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}", enabled=bool(rec[5]), days=days, label=label
+            )
+        )
+    return out
+
+
+def encode_alarms(alarms: list[Alarm], byteorder: str) -> bytes:
+    """40 B each: seconds-of-day u32 · index · enabled · repetition · in-use 1 · label[32] UTF-8 (spec §9).
+
+    The watch takes the seconds big-endian and reads them back little-endian (verified 2026-10-26)."""
+    fmt = ">I" if byteorder == "big" else "<I"
+    out = b""
+    for i, a in enumerate(alarms):
+        label = a.label.encode("utf-8")[:32]
+        out += struct.pack(fmt, a.seconds) + bytes([i, int(a.enabled), a.mask, 1]) + label.ljust(32, b"\0")
+    return out
+
+
+# -- goals ----------------------------------------------------------------------------------------------------------
+
+
+class Goals(BaseModel):
+    steps: int = Field(ge=1000, le=60000)
+    distance_m: int = Field(ge=500, le=99000)
+    kcal: int = Field(ge=50, le=5000)
+
+
+def parse_goals(raw: bytes) -> dict[str, Any]:
+    """28-byte read form: steps, distance m, kcal, sleep min, exercise min (u32 LE) · stand h · 7 flags."""
+    if len(raw) >= 21:
+        steps, dist, kcal, sleep, exercise = struct.unpack_from("<5I", raw)
+        return {
+            "steps": steps,
+            "distance_m": dist,
+            "kcal": kcal,
+            "sleep_min": sleep,
+            "exercise_min": exercise,
+            "stand_h": raw[20],
+        }
+    if len(raw) == 10:
+        steps, dist, kcal = struct.unpack(">IIH", raw)
+        return {"steps": steps, "distance_m": dist, "kcal": kcal}
+    raise SettingsError(f"unexpected goals payload {raw.hex()}")
+
+
+def encode_goals(g: Goals, form: str, current: bytes | None = None) -> bytes:
+    if form == "short_be":  # spec §9 / Gadgetbridge: the official app's 10-byte form
+        return struct.pack(">IIH", g.steps, g.distance_m, g.kcal)
+    if current is None or len(current) < 21:
+        raise SettingsError("need the watch's current goals to write the long form")
+    return struct.pack("<3I", g.steps, g.distance_m, g.kcal) + current[12:]  # keep sleep/exercise/stand/flags
+
+
+# -- reminders ------------------------------------------------------------------------------------------------------
+
+
+class Reminder(BaseModel):
+    enabled: bool
+    every_min: int = Field(60, ge=30, le=180)
+    quiet_start: str | None = Field(None, description="HH:MM: no reminders from here…")
+    quiet_end: str | None = Field(None, description="…until here")
+
+
+def _hhmm(seconds: int) -> str:
+    return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}"
+
+
+def _secs(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 3600 + int(m) * 60
+
+
+def parse_reminder(raw: bytes) -> Reminder:
+    """11 B, big-endian on fw 1.0.0.57 (probe 2026-10-26): enabled · minutes u16 · quiet start u32 · quiet end u32."""
+    enabled, every, start, end = struct.unpack(">BHII", raw[:11])
+    quiet = (start or end) and start != end
+    return Reminder(
+        enabled=bool(enabled),
+        every_min=max(30, min(180, every)),
+        quiet_start=_hhmm(start) if quiet else None,
+        quiet_end=_hhmm(end) if quiet else None,
+    )
+
+
+def encode_reminder(r: Reminder) -> bytes:
+    start = _secs(r.quiet_start) if r.enabled and r.quiet_start and r.quiet_end else 0
+    end = _secs(r.quiet_end) if r.enabled and r.quiet_start and r.quiet_end else 0
+    return struct.pack(">BHII", int(r.enabled), r.every_min, start, end)
+
+
+# -- request bodies -------------------------------------------------------------------------------------------------
+
+
+class Switch(BaseModel):
+    on: bool
+
+
+class HrAlerts(BaseModel):
+    low: int | None = Field(None, ge=30, le=120)
+    high: int | None = Field(None, ge=80, le=220)
+    sport_high: int | None = Field(None, ge=80, le=220)
+    spo2_low: int | None = Field(None, ge=70, le=99)
+
+
+class RawSetting(BaseModel):
+    name: str
+    hex: str = Field(max_length=800, pattern=r"^[0-9a-fA-F]*$")
+
+
+class Units(BaseModel):
+    metric: bool = True
+    celsius: bool = True
+
+
+# -- sports menu ------------------------------------------------------------------------------------------------------
+
+# Activity type codes (Gadgetbridge CmfActivityType); the watch's menu holds up to 36.
+SPORTS: dict[int, str] = {
+    0x01: "Outdoor running",
+    0x02: "Indoor running",
+    0x03: "Outdoor walking",
+    0x04: "Indoor walking",
+    0x05: "Outdoor cycling",
+    0x06: "Indoor cycling",
+    0x07: "Hiking",
+    0x08: "Climbing",
+    0x09: "Basketball",
+    0x0A: "Football",
+    0x0B: "Badminton",
+    0x0C: "Tennis",
+    0x0D: "Table tennis",
+    0x0E: "Baseball",
+    0x0F: "Rowing machine",
+    0x10: "Elliptical",
+    0x11: "Yoga",
+    0x12: "Pilates",
+    0x13: "Strength training",
+    0x14: "Dancing",
+    0x15: "Pool swimming",
+    0x16: "Open-water swimming",
+    0x17: "Free training",
+    0x18: "HIIT",
+    0x19: "Jump rope",
+    0x1A: "Cricket",
+    0x21: "Skiing",
+    0x22: "Golf",
+    0x72: "Trail running",
+}
+
+
+def parse_sports(raw: bytes) -> list[int]:
+    return list(raw[1 : 1 + raw[0]]) if raw else []
+
+
+def encode_sports(codes: list[int]) -> bytes:
+    if not 1 <= len(codes) <= 36:
+        raise SettingsError("the sports menu holds 1–36 sports")
+    return bytes([len(codes), *codes])
+
+
+# -- service --------------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class WriteResult:
+    ok: bool
+    acked: bool
+    encoding: str | None = None
+    tried: list[str] = field(default_factory=list)
+
+    def public(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class SettingsService:
+    def __init__(self, link: WatchLink, store: Store) -> None:
+        self.link = link
+        self.store = store
+
+    # -- raw ------------------------------------------------------------------------------------------------------
+
+    async def read(self, name: str) -> bytes | None:
+        return await self.link.read_setting(GROUPS[name])
+
+    async def write(self, name: str, payload: bytes) -> bool:
+        return await self.link.write_setting(GROUPS[name], SET, payload, ACK)
+
+    def _encodings(self) -> dict[str, str]:
+        raw = self.store.get_kv(ENCODING_KEY)
+        return json.loads(raw) if raw else {}
+
+    def _learn(self, name: str, encoding: str) -> None:
+        enc = self._encodings()
+        if enc.get(name) != encoding:
+            enc[name] = encoding
+            self.store.set_kv(ENCODING_KEY, json.dumps(enc))
+            self.store.add_event("settings", {"learned": name, "encoding": encoding})
+
+    async def _write_verified(
+        self, name: str, candidates: dict[str, bytes], check, restore: bytes | None = None
+    ) -> WriteResult:  # type: ignore[no-untyped-def]
+        """Try each encoding (the learned one first) until reading back satisfies ``check``. If none does, write
+        ``restore`` — the previous value in the WRITE format (read and write formats differ, so echoing the raw
+        read bytes would corrupt it: findings 2026-10-26). Without one, nothing is restored."""
+        learned = self._encodings().get(name)
+        order = sorted(candidates, key=lambda k: k != learned)
+        result = WriteResult(ok=False, acked=False)
+        for enc in order:
+            result.tried.append(enc)
+            result.acked = await self.write(name, candidates[enc]) or result.acked
+            back = await self.read(name)
+            if back is not None and check(back):
+                self._learn(name, enc)
+                result.ok, result.encoding = True, enc
+                return result
+        if restore is not None:  # nothing stuck: put the watch back how it was
+            await self.write(name, restore)
+        return result
+
+    # -- typed ----------------------------------------------------------------------------------------------------
+
+    async def snapshot(self) -> dict[str, Any]:
+        """Everything readable, decoded (None where the watch didn't answer)."""
+        out: dict[str, Any] = {}
+        raw = {
+            n: await self.read(n)
+            for n in (
+                "alarms",
+                "goals",
+                "time_format",
+                "standing_reminder",
+                "water_reminder",
+                "wrist_raise",
+                "dnd",
+                "sports",
+            )
+        }
+        out["alarms"] = [a.model_dump() for a in parse_alarms(raw["alarms"])] if raw["alarms"] is not None else None
+        out["goals"] = parse_goals(raw["goals"]) if raw["goals"] else None
+        out["time_format"] = ("12h" if raw["time_format"][0] else "24h") if raw["time_format"] else None
+        for r in ("standing_reminder", "water_reminder"):
+            out[r] = parse_reminder(raw[r]).model_dump() if raw[r] and len(raw[r]) >= 11 else None
+        out["wrist_raise"] = bool(raw["wrist_raise"][0]) if raw["wrist_raise"] else None
+        out["dnd"] = bool(raw["dnd"][0]) if raw["dnd"] else None
+        codes = parse_sports(raw["sports"]) if raw["sports"] else []
+        out["sports"] = (
+            [{"code": c, "name": SPORTS.get(c, f"Sport {c:#04x}")} for c in codes] if raw["sports"] else None
+        )
+        out["sports_available"] = [{"code": c, "name": n} for c, n in SPORTS.items()]
+        return out
+
+    async def set_alarms(self, alarms: list[Alarm]) -> WriteResult:
+        if len(alarms) > MAX_ALARMS:
+            raise SettingsError(f"the watch holds up to {MAX_ALARMS} alarms")
+        current = await self.read("alarms")
+        restore = encode_alarms(parse_alarms(current), "big") if current is not None else None
+        # the watch keeps its alarms sorted by time and sets byte 7 itself (findings 2026-10-26)
+        want = sorted((a.time, a.enabled, a.days, a.label[:32]) for a in alarms)
+        return await self._write_verified(
+            "alarms",
+            {"be": encode_alarms(alarms, "big")},  # verified on-device: BE in, LE out (findings 2026-10-26)
+            lambda back: sorted((a.time, a.enabled, a.days, a.label) for a in parse_alarms(back)) == want,
+            restore,
+        )
+
+    async def set_goals(self, goals: Goals) -> WriteResult:
+        """The official app's 10-byte BE form (spec §9). The watch acks it, but its goals GET doesn't change on
+        fw 1.0.0.57 (findings 2026-10-26), so this can't be verified by read-back: ``ok`` = acked."""
+        acked = await self.write("goals", encode_goals(goals, "short_be"))
+        self.store.set_kv("goals_sent", json.dumps(goals.model_dump()))
+        return WriteResult(ok=acked, acked=acked, encoding="short_be (unverified)")
+
+    async def set_simple(self, name: str, value: bool) -> WriteResult:
+        """One-byte switches: dnd, wrist_raise; time_format takes True for 12h."""
+        if name not in ("dnd", "wrist_raise", "time_format"):
+            raise SettingsError(f"{name} isn't a switch")
+        before = await self.read(name)
+        return await self._write_verified(
+            name, {"byte": bytes([int(value)])}, lambda back: back[:1] == bytes([value]), before[:1] if before else None
+        )
+
+    async def set_reminder(self, name: str, r: Reminder) -> WriteResult:
+        if name not in ("standing_reminder", "water_reminder"):
+            raise SettingsError(f"{name} isn't a reminder")
+        payload = encode_reminder(r)
+        before = await self.read(name)  # same format both ways (findings 2026-10-26)
+        return await self._write_verified(name, {"be": payload}, lambda back: back[:11] == payload, before)
+
+    async def set_sports(self, codes: list[int]) -> WriteResult:
+        payload = encode_sports(codes)
+        before = await self.read("sports")  # count + codes, same format both ways
+        return await self._write_verified(
+            "sports", {"list": payload}, lambda back: back[: len(payload)] == payload, before
+        )
+
+    async def set_monitoring(self, kind: str, enabled: bool) -> WriteResult:
+        """All-day heart rate / SpO2 / stress measurement (write-only: the watch's read-back isn't understood)."""
+        acked = await self.link.write_setting(
+            GROUPS["health_monitoring"], SET, bytes([MONITOR_KINDS[kind], int(enabled)]), ACK
+        )
+        return WriteResult(ok=acked, acked=acked, encoding="kind+switch")
+
+    async def set_hr_alerts(
+        self, low: int | None, high: int | None, sport_high: int | None, spo2_low: int | None
+    ) -> WriteResult:
+        """HR / SpO2 alerts (spec §9, Gadgetbridge): 00 = off, else 01 · low · high · sport high · SpO2 low · 4×00."""
+        if not any((low, high, sport_high, spo2_low)):
+            payload = b"\x00"
+        else:
+            payload = bytes([1, low or 0, high or 255, sport_high or 255, spo2_low or 0, 0, 0, 0, 0])
+        await self.link.write_setting(HR_ALERTS.cmd1, HR_ALERTS.cmd2, payload, None)
+        self.store.set_kv(
+            "hr_alerts", json.dumps({"low": low, "high": high, "sport_high": sport_high, "spo2_low": spo2_low})
+        )
+        return WriteResult(ok=True, acked=False, encoding="spec")
+
+    async def set_units(self, metric: bool, celsius: bool) -> WriteResult:
+        a = await self.link.write_setting(
+            UNIT_LENGTH.cmd1, UNIT_LENGTH.cmd2, bytes([1, 0 if metric else 1]), UNIT_LENGTH_ACK.cmd2
+        )
+        b = await self.link.write_setting(
+            UNIT_TEMPERATURE.cmd1, UNIT_TEMPERATURE.cmd2, bytes([1, 0 if celsius else 1]), UNIT_TEMPERATURE_ACK.cmd2
+        )
+        self.store.set_kv("units", json.dumps({"metric": metric, "celsius": celsius}))
+        return WriteResult(ok=a and b, acked=a and b, encoding="gadgetbridge")

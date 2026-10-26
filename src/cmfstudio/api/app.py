@@ -16,7 +16,7 @@ import json
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
 import httpx
@@ -30,8 +30,21 @@ from pydantic import BaseModel, Field
 
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
+from ..core import settings as settings_mod
 from ..core.jobs import JobQueue
 from ..core.rules import RulesEngine
+from ..core.settings import (
+    Alarm,
+    Goals,
+    HrAlerts,
+    RawSetting,
+    Reminder,
+    SettingsError,
+    SettingsService,
+    Switch,
+    Units,
+    WriteResult,
+)
 from ..core.weather import WeatherService, WeatherSettings, geocode
 from ..render import clock, describe, native_face
 from ..render import html as render_html
@@ -90,6 +103,7 @@ def create_app(
     rules: RulesEngine | None = None,
     native: NativeService | None = None,
     weather: WeatherService | None = None,
+    settings: SettingsService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="cmf-studio watchd", version="0.1.0")
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
@@ -341,7 +355,7 @@ def create_app(
         except FileNotFoundError as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         except NativeFormatError as exc:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
         except LookupError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
@@ -413,6 +427,112 @@ def create_app(
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         except httpx.HTTPError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"forecast fetch failed: {exc!r}") from exc
+
+    # -- watch settings (read-modify-write, every write verified by reading it back) ---------------------------
+
+    def need_settings() -> SettingsService:
+        if settings is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "settings not configured")
+        return settings
+
+    async def settings_call(coro):  # type: ignore[no-untyped-def]
+        try:
+            result = await coro
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+        except SettingsError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+        if isinstance(result, WriteResult):
+            store.add_event("settings", {"ok": result.ok, "encoding": result.encoding, "tried": result.tried})
+            if not result.ok:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY, f"the watch didn't take the change (tried {result.tried})"
+                )
+            return result.public()
+        return result
+
+    @app.get("/settings", dependencies=[Depends(auth)])
+    async def get_settings() -> dict[str, Any]:
+        return await settings_call(need_settings().snapshot())
+
+    @app.put("/settings/alarms", dependencies=[Depends(auth)])
+    async def put_alarms(alarms: list[Alarm]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_alarms(alarms))
+
+    @app.put("/settings/goals", dependencies=[Depends(auth)])
+    async def put_goals(goals: Goals) -> dict[str, Any]:
+        return await settings_call(need_settings().set_goals(goals))
+
+    @app.put("/settings/switch/{name}", dependencies=[Depends(auth)])
+    async def put_switch(name: Literal["dnd", "wrist_raise", "time_format"], body: Switch) -> dict[str, Any]:
+        """``time_format``: on = 12-hour."""
+        return await settings_call(need_settings().set_simple(name, body.on))
+
+    @app.put("/settings/reminders/{name}", dependencies=[Depends(auth)])
+    async def put_reminder(name: Literal["standing_reminder", "water_reminder"], body: Reminder) -> dict[str, Any]:
+        return await settings_call(need_settings().set_reminder(name, body))
+
+    @app.put("/settings/sports", dependencies=[Depends(auth)])
+    async def put_sports(codes: list[int]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_sports(codes))
+
+    @app.put("/settings/monitoring/{kind}", dependencies=[Depends(auth)])
+    async def put_monitoring(kind: Literal["heart_rate", "spo2", "stress"], body: Switch) -> dict[str, Any]:
+        return await settings_call(need_settings().set_monitoring(kind, body.on))
+
+    @app.put("/settings/hr_alerts", dependencies=[Depends(auth)])
+    async def put_hr_alerts(body: HrAlerts) -> dict[str, Any]:
+        return await settings_call(need_settings().set_hr_alerts(body.low, body.high, body.sport_high, body.spo2_low))
+
+    @app.put("/settings/units", dependencies=[Depends(auth)])
+    async def put_units(body: Units) -> dict[str, Any]:
+        return await settings_call(need_settings().set_units(body.metric, body.celsius))
+
+    @app.get("/settings/written", dependencies=[Depends(auth)])
+    async def get_written_settings() -> dict[str, Any]:
+        """Write-only settings as last sent from here (the watch can't report them)."""
+        return {k: json.loads(store.get_kv(k) or "null") for k in ("hr_alerts", "units")}
+
+    @app.post("/find-watch", dependencies=[Depends(auth)])
+    async def post_find_watch() -> dict[str, Any]:
+        try:
+            return {"acked": await link.find_watch()}
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+
+    @app.post("/settings/raw", dependencies=[Depends(auth)])
+    async def post_settings_raw(body: RawSetting) -> dict[str, Any]:
+        """Research: write raw bytes to one settings group (SET 0001, Tier 1), then read it back. Settings groups
+        only; never exposed over MCP. Used to learn write formats (research/findings.md)."""
+        if body.name not in settings_mod.GROUPS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"settings groups only: {sorted(settings_mod.GROUPS)}")
+        cmd1 = settings_mod.GROUPS[body.name]
+        try:
+            acked = await link.write_setting(cmd1, 0x0001, bytes.fromhex(body.hex), 0x0003)
+            back = await link.read_setting(cmd1)
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        result = {
+            "name": body.name,
+            "wrote": body.hex.lower(),
+            "acked": acked,
+            "read_back": back.hex() if back else None,
+        }
+        store.add_event("settings_raw", result)
+        return result
+
+    @app.post("/settings/probe", dependencies=[Depends(auth)])
+    async def post_settings_probe() -> dict[str, Any]:
+        """Read every setting that has a GET, raw (Tier 0). For learning formats before writing them."""
+        out: dict[str, Any] = {}
+        for name, cmd1 in settings_mod.GROUPS.items():
+            try:
+                raw = await link.read_setting(cmd1)
+            except LinkError as exc:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+            out[name] = raw.hex() if raw is not None else None
+        store.add_event("settings_probe", out)
+        return out
 
     @app.get("/rules", dependencies=[Depends(auth)])
     async def get_rules() -> dict[str, Any]:

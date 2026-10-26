@@ -367,6 +367,8 @@ class WatchLink:
         if msg.op == ops.MUSIC_BUTTON:
             event = buttons.decode(msg.payload)
             self._emit("button", name=event.name, raw=event.raw.hex())
+        elif msg.op == ops.FIND_PHONE:  # the wearer asked the watch to find the phone (01 = start, else stop)
+            self._emit("find_phone", start=bool(msg.payload[:1] == b"\x01"))
         elif msg.op == ops.BATTERY and msg.payload:
             self.battery = msg.payload[0]
         elif msg.op == ops.DIAL_COMMAND_RET and len(msg.payload) >= 4:
@@ -405,6 +407,39 @@ class WatchLink:
             try:
                 payload = pl.notification(title, body, icon)
                 await s.request(ops.APP_NOTIFICATION, payload, ops.APP_NOTIFICATION_ACK, timeout=3)
+                return True
+            except TimeoutError:
+                return False
+
+    async def read_setting(self, cmd1: int, timeout: float = 3.0) -> bytes | None:
+        """GET (cmd2 0002, payload A5) -> the watch's reply on the SET opcode (cmd2 0001), or None if it stays
+        silent (spec §4.4). Read-only."""
+        async with self._op() as s:
+            try:
+                reply = await s.request(Op(cmd1, 0x0002), pl.POLL, Op(cmd1, 0x0001), timeout=timeout)
+            except TimeoutError:
+                return None
+        return reply.payload
+
+    async def write_setting(
+        self, cmd1: int, cmd2: int, payload: bytes, ack_cmd2: int | None, timeout: float = 3.0
+    ) -> bool:
+        """SET; returns whether the ack (``ack_cmd2``) arrived. ``ack_cmd2=None`` sends without waiting."""
+        async with self._op() as s:
+            if ack_cmd2 is None:
+                await s.send(Op(cmd1, cmd2), payload)
+                return True
+            try:
+                await s.request(Op(cmd1, cmd2), payload, Op(cmd1, ack_cmd2), timeout=timeout)
+                return True
+            except TimeoutError:
+                return False
+
+    async def find_watch(self) -> bool:
+        """Make the watch ring/vibrate (FIND_WATCH 01 → ack 005D 0003). Returns whether it acked."""
+        async with self._op() as s:
+            try:
+                await s.request(ops.FIND_WATCH, b"\x01", ops.FIND_WATCH_ACK, timeout=3)
                 return True
             except TimeoutError:
                 return False
