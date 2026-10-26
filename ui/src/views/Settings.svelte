@@ -17,6 +17,9 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let notes = $state<Record<string, string>>({});
+  let screens = $state<any[][] | null>(null);
+  let panel = $state<{ name: string; number: string }[]>([]);
+  let backups = $state<any[]>([]);
 
   async function load() {
     loading = true;
@@ -32,6 +35,10 @@
       sports = (snap.sports ?? []).map((s: any) => s.code);
       if (written.hr_alerts) alerts = written.hr_alerts;
       if (written.units) units = written.units;
+      const c = await get("/settings/contacts");
+      panel = c.contacts.map((x: any) => ({ ...x }));
+      backups = c.backups;
+      get("/settings/tiles").then((t) => (screens = t.screens)).catch(() => (screens = []));
     } catch (e: any) {
       error = e.status === 503 ? "The watch isn't connected — settings are read from it live." : e.message;
     } finally {
@@ -171,6 +178,43 @@
       </div>
       {#if notes.sports}<p class="muted tiny">{notes.sports}</p>{/if}
     </section>
+
+    <section class="card">
+      <h2>Info panel</h2>
+      <p class="muted small">Up to 20 lines shown in the watch's Contacts app — a list, codes, anything glanceable. They replace the watch's contacts (the previous list is kept as a backup here).</p>
+      {#each panel as line, i}
+        <div class="row">
+          <input placeholder="Text" maxlength="32" bind:value={line.name} />
+          <input class="short" placeholder="Number / note" maxlength="25" bind:value={line.number} />
+          <button class="small" aria-label="remove line" onclick={() => (panel = panel.filter((_, j) => j !== i))}>✕</button>
+        </div>
+      {/each}
+      <div class="row">
+        <button disabled={panel.length >= 20} onclick={() => (panel = [...panel, { name: "", number: "" }])}>Add line</button>
+        <button class="primary" onclick={() => save("panel", () => put("/settings/contacts", panel.filter((l) => l.name.trim())))}>Send to watch</button>
+      </div>
+      {#if notes.panel}<p class="muted tiny">{notes.panel}</p>{/if}
+      {#if backups.length}
+        <details><summary class="muted small">Backups ({backups.length})</summary>
+          {#each backups as b}
+            <p class="tiny">{new Date(b.saved_at * 1000).toLocaleString()} · {b.contacts.map((c: any) => c.name).join(", ")}
+              <button class="small" onclick={() => (panel = b.contacts.map((c: any) => ({ ...c })))}>Load</button></p>
+          {/each}
+        </details>
+      {/if}
+    </section>
+
+    <section class="card">
+      <h2>Home screens</h2>
+      <p class="muted small">The watch's swipe-through home screens, read from the watch. Shown only: rearranging them isn't safe yet (a wrong card id blanks the screens).</p>
+      {#if screens === null}<p class="muted small">Reading…</p>
+      {:else if !screens.length}<p class="muted small">The watch didn't report its screens.</p>
+      {:else}
+        <ol class="screens">
+          {#each screens as cards}<li>{cards.map((c) => c.name).join(" · ")}</li>{/each}
+        </ol>
+      {/if}
+    </section>
   </div>
 {/if}
 
@@ -190,6 +234,9 @@
   .sports { padding-left: 20px; margin: 6px 0; display: grid; gap: 4px; }
   .sports li span { display: inline-block; min-width: 150px; }
   .small { font-size: 12px; padding: 2px 8px; }
+  .short { max-width: 130px; }
+  .row input:not([type="checkbox"]):not(.short) { flex: 1; }
+  .screens { padding-left: 20px; margin: 6px 0; display: grid; gap: 4px; }
   .tiny { font-size: 11px; margin: 4px 0 0; }
   .faint { color: var(--faint); }
   .error { color: var(--bad); }

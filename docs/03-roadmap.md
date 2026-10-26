@@ -103,8 +103,10 @@ item: sim/fixture tests first, then the web UI, then a check on the watch. Nothi
 - [x] Workouts + GPS routes decoded from sync (Gadgetbridge layouts, v1 sanity-checked against the spec's layout),
   Health-tab list + route drawing. No workout recorded on the watch yet: decode unverified on real data
 - [x] Find my watch (acked on device); find phone → Mac plays a sound (sim)
-- [ ] Mac now-playing ↔ watch music card and buttons
-- [ ] (careful) home tiles: reorder ids read back from the watch only; contacts as an info panel, backed up first
+- [x] Mac now-playing ↔ watch music card and buttons (Spotify / Music over AppleScript, only if running; sim-tested
+  with a fake osascript; off by default — owner to try)
+- [x] (careful) home tiles: **read-only** (on device: 4 screens) — reordering stays out until the SET framing is known;
+  contacts as an info panel (backed up first, verified by read-back, cleared with a blank record — on device)
 
 ## Phase 6 — Firmware research (read-only, optional) · open-ended
 - [ ] Obtain stock OTA for the current firmware version
