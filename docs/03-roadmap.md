@@ -94,15 +94,15 @@ item: sim/fixture tests first, then the web UI, then a check on the watch. Nothi
   templates (362 Steady, 359 Ring Data, 288 Type): every digit set re-drawn in any Google/local font, digit colour,
   background colour/gradient/picture; asset pool rebuilt with every ref tail re-pointed (`render/native*.py`).
   Installs over a stock face's slot (9075 replace). Installed on the watch 2026-10-26 over SlopeTime (finish 01,
-  activated); render pending owner check
+  activated); renders correctly (owner, 2026-10-26)
 - [x] Weather push (+ the city line as a glance: place, text, or a Shortcut's output e.g. next calendar event).
-  Open-Meteo, every 30 min while enabled. Sent to the watch once (job 87); display pending owner check
+  Open-Meteo, every 30 min while enabled. Displayed on the watch (owner check 2026-10-26)
 - [x] Settings through watchd / UI / MCP. Probed the watch's own values first; every write verified by read-back.
   On-device: alarms (BE in / LE out, sorted), DND, reminders, sports menu (read) work; goals acked but unverifiable;
   monitoring / HR alerts / units write-only (sim). MCP: get_watch_settings, set_alarm, remove_alarm, set_goals,
   set_do_not_disturb, find_watch. Not done: world clock (city-id table unknown), quick replies (no use with an iPhone)
 - [x] Workouts + GPS routes decoded from sync (Gadgetbridge layouts, v1 sanity-checked against the spec's layout),
-  Health-tab list + route drawing. No workout recorded on the watch yet: decode unverified on real data
+  Health-tab list + route drawing. Pending: owner records a workout (ideally outdoor GPS) to verify on real data
 - [x] Find my watch (acked on device); find phone → Mac plays a sound (sim)
 - [x] Mac now-playing ↔ watch music card and buttons (Spotify / Music over AppleScript, only if running; sim-tested
   with a fake osascript; off by default — owner to try)
