@@ -161,3 +161,34 @@ async def test_sync_job(paired_link, day):
         assert done.state == "done" and done.result["new_samples"]["spo2"] == 1
     finally:
         await q.stop()
+
+
+async def test_scheduler_syncs_after_connect_and_periodically(paired_link, day):
+    from cmfstudio.core.scheduler import SyncScheduler
+
+    store = Store(":memory:")
+    mgr = SyncManager(store, idle_s=0.3)
+    mgr.attach(paired_link)
+    q = JobQueue(store, paired_link, handlers={"sync": lambda link, _a: mgr.fetch(link)})
+    q.start()
+    sched = SyncScheduler(q, paired_link, interval_s=0.3, after_connect_s=0.05)
+    task = asyncio.create_task(sched.run())
+    try:
+        await asyncio.sleep(1.0)
+        syncs = [j for j in store.recent_jobs() if j.kind == "sync"]
+        assert len(syncs) >= 2 and all(j.state == "done" for j in syncs[1:])
+        assert store.sample_counts()["hr"] == 2  # periodic re-syncs never duplicate
+    finally:
+        task.cancel()
+        await q.stop()
+
+
+async def test_scheduler_skips_when_sync_pending(paired_link):
+    from cmfstudio.core.scheduler import SyncScheduler
+
+    store = Store(":memory:")
+    q = JobQueue(store, paired_link, handlers={"sync": lambda link, _a: asyncio.sleep(10)})
+    sched = SyncScheduler(q, paired_link)
+    sched.kick()
+    sched.kick()
+    assert len([j for j in store.open_jobs() if j.kind == "sync"]) == 1

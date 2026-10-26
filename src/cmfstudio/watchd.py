@@ -23,6 +23,7 @@ from .ble.keys import KeychainKeyStore, MemoryKeyStore
 from .ble.link import WatchLink
 from .core.jobs import JobQueue
 from .core.power import WakeWatcher
+from .core.scheduler import SyncScheduler
 from .store.db import Store
 from .sync.manager import SyncManager
 
@@ -89,11 +90,13 @@ async def serve(args: argparse.Namespace) -> None:
     queue.start()
     link_task = asyncio.create_task(link.run(), name="link")
     wake_task = asyncio.create_task(WakeWatcher(on_wake).run(), name="wake")
+    sync_task = asyncio.create_task(SyncScheduler(queue, link, interval_s=args.sync_every * 60).run(), name="sync")
     log.info("watchd up: %s, api http://127.0.0.1:%d, db %s", address, args.port, db_path)
     try:
         await server.serve()  # returns on SIGINT/SIGTERM
     finally:
         wake_task.cancel()
+        sync_task.cancel()
         await link.stop()
         await queue.stop()
         await asyncio.wait_for(link_task, 10)
@@ -107,6 +110,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--db", type=Path)
     p.add_argument("--keepalive", type=float, default=60.0, help="seconds between battery keepalive polls")
+    p.add_argument("--sync-every", type=float, default=60.0, help="minutes between automatic health syncs")
     p.add_argument("-v", "--verbose", action="count", default=0)
     args = p.parse_args(argv)
     logging.basicConfig(
