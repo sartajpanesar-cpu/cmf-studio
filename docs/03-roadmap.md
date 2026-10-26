@@ -33,10 +33,18 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 - [x] All device-writing endpoints covered by sim tests (tests/test_api.py, test_jobs.py, test_ble.py)
 
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
-**Status 2026-10-25 (where we left off):** branch `phase-2`. Sync pipeline built (68 sim tests) and working on the
-real watch: watchd auto-syncs 15 s after each connect and hourly (`cmf sync` / `cmf samples` for manual use).
-Remaining: wear the watch overnight → sleep frames; turn on SpO2/stress monitoring → those frames; compare one day
-with the watch's own screens (steps, kcal?, resting HR); measure buffer length later.
+**Status 2026-10-26 (where we left off):** branch `phase-2` (not merged), 85 sim tests. Working on the real watch:
+watchd auto-syncs 15 s after each connect and hourly; daily totals rebuild after each sync; `cmf sync`, `cmf samples [metric]`,
+`cmf today`, `cmf days N`, `cmf reparse`. Real frames export to gitignored `tests/fixtures/private/` (`scripts/export_fixtures.py`).
+Owner decisions: keep roadmap order (Phase 3 faces before Phase 4 UI); push to GitHub later; phone health history not needed.
+**Next session:**
+1. Owner wore the watch overnight → check `uv run cmf today` / `cmf samples` for sleep sessions; compare sleep with the watch
+   (AC: implement + document differences).
+2. Owner reads steps, calories, resting HR off the watch screens → compare with `cmf today` (AC: cross-check one day;
+   settles kcal vs cal — see findings).
+3. SpO2/stress: owner checks monitoring is on in watch settings → confirm those frames arrive (AC: land in samples).
+4. Re-run `scripts/export_fixtures.py` once sleep/SpO2/stress frames exist; tests in test_real_frames.py cover them.
+5. Buffer length (leave the Mac closed 1–3 days) can be measured later; then close Phase 2, merge, start Phase 3.
 
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
 - [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
