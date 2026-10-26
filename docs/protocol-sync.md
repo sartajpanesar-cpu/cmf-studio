@@ -75,11 +75,18 @@ connect.
 - Battery is not part of sync; it arrives in the push burst after TIME (**Ours**, probe-1). GB likewise only
   handles BATTERY pushes (`CmfWatchProSupport.java:417-424`).
 
+## Observed on our watch (fw 1.0.0.57, 2026-10-25)
+
+- The sequence above works as written; a light day is 4 frames in ~1 s (**Ours**).
+- **The watch keeps a cursor**: a repeat fetch doesn't resend already-fetched HR; it re-sends only the
+  current-hour activity record (stamped at fetch time) and a re-stamped resting-HR record (**Ours**).
+- ACTIVITY_DATA is **hourly** cumulative records; HR every 5 min while worn (**Ours**).
+- Calories appear to be **kcal**, contradicting Spec §8.1 (to confirm on the watch screen).
+
 ## Open questions for our watch (Phase 2 measures these)
 
-1. Does a fetch return **only data since the last fetch** (watch advances a cursor; ACK_2 `since_ts`), or
-   everything buffered? Decides whether re-sync is naturally idempotent. Either way we upsert on
-   `(metric, ts)` and store raw frames first.
+1. ~~Cursor or full buffer?~~ **Cursor** (see above). What `since_ts` means exactly is still open: it equalled
+   the last HR sample time on both fetches.
 2. What do the 4 ACK_2 flag bytes mean?
 3. How long does the watch buffer data (roadmap AC: measure by leaving the Mac closed 1, 2, 3+ days)?
 4. Resting HR 5-byte layout and calorie units on fw 1.0.0.57.

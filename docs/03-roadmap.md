@@ -34,13 +34,13 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
-- [ ] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
+- [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
 - [ ] Fixtures: real captured frames in `tests/fixtures/`, parser tests pass
-- [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch
+- [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress and SpO2 not yet seen)
 - [ ] Values cross-checked against the watch's own screens for one day (document discrepancies)
 - [ ] Sleep: implement, then document how it differs from the watch (known Gadgetbridge bug)
 - [ ] Measure on-watch buffer length (findings)
-- [ ] Re-sync is idempotent (no duplicate samples)
+- [x] Re-sync is idempotent (no duplicate samples) (upsert on (metric, ts) + watch-side cursor; verified on device 2026-10-25)
 
 ## Phase 3 — Face pipeline · ~1 weekend
 See `06-studio-design-pipeline.md`.
