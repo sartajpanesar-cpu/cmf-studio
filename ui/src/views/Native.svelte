@@ -64,7 +64,11 @@
   function loadDraft(): Spec {
     try {
       const raw = localStorage.getItem("cmf-native-draft");
-      if (raw) return { ...blank(), ...JSON.parse(raw) };
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (!("show_data" in draft) && draft.background == null) draft.background = "#000000"; // pre-cleanup draft
+        return { ...blank(), ...draft };
+      }
     } catch { /* per-viewer convenience only */ }
     return blank();
   }

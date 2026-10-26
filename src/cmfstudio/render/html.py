@@ -61,12 +61,13 @@ def _font_css(spec: FaceSpec, base: Path | None) -> tuple[str, str]:
     links, faces = [], []
     for f in spec.fonts:
         if f.source == "google":
-            weights = ";".join(str(w) for w in sorted(set(f.weights)))
+            # One request per weight, plus the family's default style: Google rejects a whole request that names a
+            # weight the font doesn't have (Orbitron has no 300), and the page then fell back to the system font.
+            # With separate links the browser uses the closest weight that did load.
             family = f.family.replace(" ", "+")
-            links.append(
-                f'<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family={family}:wght@{weights}'
-                '&display=block">'
-            )
+            base = f"https://fonts.googleapis.com/css2?family={family}"
+            for href in [base] + [f"{base}:wght@{w}" for w in sorted(set(f.weights))]:
+                links.append(f'<link rel="stylesheet" href="{href}&display=block">')
         elif f.source == "local":
             if not f.path:
                 raise ValueError(f"local font {f.family!r} needs a path")

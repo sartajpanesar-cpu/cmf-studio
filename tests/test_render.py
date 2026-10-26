@@ -282,3 +282,12 @@ def test_render_runs_no_scripts_and_reaches_no_other_hosts(tmp_path):
     srv.shutdown()
     assert hits == [], "no request may leave the render page except to Google Fonts"
     assert Image.open(io.BytesIO(png)).convert("RGB").getpixel((233, 233)) == (0, 0, 0), "script must not run"
+
+
+def test_google_fonts_load_each_weight_separately():
+    """A weight the font lacks must not take the whole font down with it (Orbitron has no 300)."""
+    spec = FaceSpec.model_validate({"name": "x", "fonts": [{"family": "Orbitron", "weights": [300, 700]}]})
+    page = html.build(spec, CTX)
+    assert 'href="https://fonts.googleapis.com/css2?family=Orbitron&display=block"' in page
+    assert "family=Orbitron:wght@300&" in page and "family=Orbitron:wght@700&" in page
+    assert "wght@300;700" not in page
