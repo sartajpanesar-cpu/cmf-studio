@@ -59,11 +59,11 @@ See `06-studio-design-pipeline.md`.
 - [x] Document what the face format supports natively (live time digits? which fields?) vs baked-in (docs/06 table)
 
 ## Phase 4 — Studio + Health UI · 2–3 weekends
-- [ ] Svelte app served by watchd
-- [ ] Studio: layers (text/image/shape/data), font picker, color, live round preview, save/install
-- [ ] "Describe a face" → Claude generates HTML/CSS → preview → install
-- [ ] Health: trends, baselines, anomaly flags, weekly Claude summary (aggregates only)
-- [ ] Widgets editor (port Gadgetbridge widget setup)
+- [x] Svelte app served by watchd (`cmf ui`; token via URL fragment)
+- [x] Studio: layers (text/image/shape/data), font picker, color, live round preview, save/install
+- [ ] "Describe a face" → Claude generates HTML/CSS → preview → install (built: Claude returns a FaceSpec, not raw HTML — validated, previewed, never auto-installed; awaiting an API key for a live run)
+- [ ] Health: trends, baselines, anomaly flags, weekly Claude summary (aggregates only) (built; weekly summary awaiting an API key for a live run)
+- [ ] Widgets editor (port Gadgetbridge widget setup) (**blocked**: Gadgetbridge has no CMF widget code to port; only the QUICK_CARD opcode is known — needs owner decision)
 
 ## Phase 5 — MCP + automations · ~1 weekend
 - [ ] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code

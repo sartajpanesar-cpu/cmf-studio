@@ -23,7 +23,7 @@ Status legend: **V** = verified on a real device by someone · **S** = simulator
 
 ## Feature support in Gadgetbridge (reference implementation, Java)
 Pro 2 marked "mostly supported", tested on fw 1.0.0.46 and 1.0.0.51.
-- Works: auth, battery, fw version/serial, time/timezone, notifications with icons, alarms, find watch/phone, music info, weather, **activity sync: steps, HR, stress, SpO2, resting HR**, widget setup (Pro 2).
+- Works: auth, battery, fw version/serial, time/timezone, notifications with icons, alarms, find watch/phone, music info, weather, **activity sync: steps, HR, stress, SpO2, resting HR**. (The website also lists widget setup for Pro 2 & 3, but Gadgetbridge @ ed37d5f has no CMF widget code — corrected 2026-10-26, see findings.)
 - Broken/missing: sleep times don't match watch; goals don't sync; contacts; measurement units; hourly weather; set watchface from phone; DND.
 - Experimental/untested: watchface upload, AGPS upload, heart alerts, calories/distance UI.
 - **Use as the source of truth for sync opcodes and payload parsing** (port to Python).
