@@ -36,12 +36,11 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 **Status 2026-10-25 (where we left off):** branch `phase-2`. Sync pipeline built (68 sim tests) and working on the
 real watch: watchd auto-syncs 15 s after each connect and hourly (`cmf sync` / `cmf samples` for manual use).
 Remaining: wear the watch overnight → sleep frames; turn on SpO2/stress monitoring → those frames; compare one day
-with the watch's own screens (steps, kcal?, resting HR); decide on committing real-frame fixtures (health data —
-see safety policy); measure buffer length later.
+with the watch's own screens (steps, kcal?, resting HR); measure buffer length later.
 
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
 - [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
-- [ ] Fixtures: real captured frames in `tests/fixtures/`, parser tests pass
+- [x] Fixtures: real captured frames in `tests/fixtures/`, parser tests pass (owner decision 2026-10-26: real frames live in gitignored `tests/fixtures/private/`, exported by `scripts/export_fixtures.py`; tests skip without them, so CI uses synthetic frames)
 - [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress and SpO2 not yet seen)
 - [ ] Values cross-checked against the watch's own screens for one day (document discrepancies)
 - [ ] Sleep: implement, then document how it differs from the watch (known Gadgetbridge bug)

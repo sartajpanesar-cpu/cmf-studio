@@ -30,3 +30,4 @@ Add commands only after: found via `cmfkit fw scan`, name clearly a getter, owne
 - Pairing keys, API tokens, Anthropic key → macOS Keychain only.
 - Health data stays local. Claude API calls send aggregates (daily/weekly), not raw samples, unless the owner explicitly asks.
 - Don't commit `refs/`, firmware images, captures, or the database (see .gitignore).
+- Real captured health frames used as test fixtures live in `tests/fixtures/private/` (gitignored, owner decision 2026-10-26); committed fixtures are synthetic.

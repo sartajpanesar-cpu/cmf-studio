@@ -12,3 +12,6 @@ research/captures/
 __pycache__/
 node_modules/
 .env
+
+# real captured health frames: local only (docs/04-safety-policy.md)
+tests/fixtures/private/
