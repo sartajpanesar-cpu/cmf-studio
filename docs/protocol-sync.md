@@ -85,11 +85,12 @@ connect.
 
 ## Open questions for our watch (Phase 2 measures these)
 
-1. ~~Cursor or full buffer?~~ **Cursor** (see above). What `since_ts` means exactly is still open: it equalled
-   the last HR sample time on both fetches.
-2. What do the 4 ACK_2 flag bytes mean?
+1. ~~Cursor or full buffer?~~ **Cursor** (see above).
+2. ~~ACK_2 meaning~~ **Answered (Ours, 2026-10-26):** ACK_2 = the watch's latest heart-rate reading,
+   `ts u32 LE ‖ bpm u8 ‖ 00 00 00` (9/12 syncs match a stored HR sample exactly). GB's "since"/"flags" naming is wrong.
 3. How long does the watch buffer data (roadmap AC: measure by leaving the Mac closed 1, 2, 3+ days)?
 4. Resting HR 5-byte layout and calorie units on fw 1.0.0.57.
-5. Do the sleep header totals reconcile with the records on our watch?
+5. ~~Sleep header totals reconcile?~~ **Yes (Ours, 2026-10-26):** records are contiguous over the session, per-stage
+   sums equal the header totals, totals sum to the session length. Header bytes 16-17 still unknown.
 6. Does sync conflict with Nothing X's cursor (if the watch tracks one cursor, whoever syncs first gets the
    data)?
