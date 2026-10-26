@@ -10,7 +10,7 @@ clone https://github.com/TechJeeper/CMF-Open.git                       CMF-Open
 clone https://github.com/joshuapassos/CMF-Watch-Pro-2-BLE-Protocol.git CMF-Watch-Pro-2-BLE-Protocol
 clone https://github.com/whatotter/cmf-watch-firmware.git              cmf-watch-firmware
 # Large; needed in Phase 2. Uncomment then:
-# clone https://codeberg.org/Freeyourgadget/Gadgetbridge.git            Gadgetbridge
+clone https://codeberg.org/Freeyourgadget/Gadgetbridge.git            Gadgetbridge
 # Phase 6 only (large):
 # clone https://github.com/lvgl/lv_port_actions_technology.git          lv_port_actions_technology
 
