@@ -248,8 +248,10 @@ async def edit_face(request: str, current: FaceSpec, ctx: Context) -> FaceSpec:
         "Here is the current watch face design:\n"
         + from_spec(current).model_dump_json()
         + f"\n\nChange it as follows: {request.strip()}\n\n"
-        "Return the complete revised design. Keep everything the request doesn't ask to change exactly as it is "
-        f"(same layers, positions, fonts, colours and name). (Metrics with data today: {available}.)"
+        "Return the complete revised design. Apply the request everywhere it applies: a colour, font or style "
+        "change covers every element that uses that colour, font or style, not just one. Keep everything the "
+        "request doesn't touch exactly as it is (layers, positions, sizes, fonts, colours, clock and name). "
+        f"(Metrics with data today: {available}.)"
     )
     design: Design = await claude.parse(Design, system=SYSTEM, user=user, effort="medium")
     revised = to_spec(design, current)
