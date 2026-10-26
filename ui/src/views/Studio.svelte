@@ -1,5 +1,6 @@
 <script lang="ts">
   import { get, post } from "../lib/api";
+  import LivePreview from "../lib/LivePreview.svelte";
   import {
     BINDINGS, GOOGLE_FONTS, RING_METRICS, SIZE, blankFace, layerTitle, newLayer,
     type FaceSpec, type Layer,
@@ -17,7 +18,6 @@
   let saved = $state<{ id: number; name: string }[]>([]);
   let confirming = $state(false);
   let installing = $state(false);
-  let previewEl = $state<HTMLImageElement | null>(null);
   let idea = $state("");
   let describing = $state(false);
 
@@ -55,13 +55,29 @@
   }
 
   let seq = 0;
+  let liveSeq = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let liveTimer: ReturnType<typeof setTimeout> | undefined;
+  let liveHtml = $state("");
+  let mode = $state<"live" | "exact">("live");
   $effect(() => {
     const snapshot = JSON.stringify(spec); // tracks every nested change
     try { localStorage.setItem("cmf-studio-draft", snapshot); } catch { /* draft is a convenience */ }
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => live(JSON.parse(snapshot)), 60); // instant: HTML only
     clearTimeout(timer);
-    timer = setTimeout(() => render(JSON.parse(snapshot)), 600);
+    timer = setTimeout(() => render(JSON.parse(snapshot)), 1200); // exact dithered render once you pause
   });
+
+  async function live(s: FaceSpec) {
+    const mine = ++liveSeq;
+    try {
+      const r = await post("/faces/html", withFonts(s));
+      if (mine === liveSeq) { liveHtml = r.html; error = null; }
+    } catch (e: any) {
+      if (mine === liveSeq) error = e.message;
+    }
+  }
 
   async function render(s: FaceSpec) {
     const mine = ++seq;
@@ -136,17 +152,13 @@
     selected = j;
   }
 
-  // click the preview: move the selected layer (or the clock) there
-  let placing = $state<"layer" | "clock">("layer");
-  function place(e: MouseEvent) {
-    if (!previewEl) return;
-    const r = previewEl.getBoundingClientRect();
-    const x = Math.round(((e.clientX - r.left) / r.width) * SIZE);
-    const y = Math.round(((e.clientY - r.top) / r.height) * SIZE);
-    if (placing === "clock") {
-      spec.clock.x = Math.max(0, Math.min(SIZE - 1, x));
-      spec.clock.y = Math.max(0, Math.min(SIZE - 1, y));
-      placing = "layer";
+  // drag on the preview: moves the clock if the drag starts on it, otherwise the selected layer
+  let grab = { dx: 0, dy: 0 };
+  function point(x: number, y: number, phase: "start" | "move" | "end", onClock: boolean) {
+    if (onClock) {
+      if (phase === "start") grab = { dx: x - spec.clock.x, dy: y - spec.clock.y };
+      spec.clock.x = Math.max(0, Math.min(SIZE - 1, x - grab.dx));
+      spec.clock.y = Math.max(0, Math.min(SIZE - 1, y - grab.dy));
       return;
     }
     if (selected == null) return;
@@ -220,9 +232,7 @@
       <div class="field"><span>X</span><input type="number" min="0" max="465" bind:value={spec.clock.x} /></div>
       <div class="field"><span>Y</span><input type="number" min="0" max="465" bind:value={spec.clock.y} /></div>
     </div>
-    <button class="small" onclick={() => (placing = "clock")} class:armed={placing === "clock"}>
-      {placing === "clock" ? "Click the preview…" : "Place clock on preview"}
-    </button>
+    <p class="faint tiny">Drag the clock on the preview to move it.</p>
 
     <h3>Layers <span class="faint">(bottom → top)</span></h3>
     <ul class="layers">
@@ -246,17 +256,14 @@
   </aside>
 
   <section class="center">
-    <div class="watch" class:busy={rendering}>
-      {#if preview}
-        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-        <img bind:this={previewEl} src={preview.png} alt="face preview as the watch will show it" onclick={place} />
-      {:else}
-        <div class="placeholder faint">{error ? "" : "Rendering…"}</div>
-      {/if}
+    <div class="modes">
+      <button class:on={mode === "live"} onclick={() => (mode = "live")}>Live</button>
+      <button class:on={mode === "exact"} onclick={() => (mode = "exact")} disabled={!preview}>Exact watch render</button>
     </div>
+    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} clock={spec.clock} onpoint={point} />
     <p class="faint small center-text">
-      {#if rendering}Rendering…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB · {Math.round(preview.checks.lit_fraction * 100)}% of the screen lit{/if}
-      · click the face to move the selected layer · box = live clock
+      Drag to move the selected layer or the clock ·
+      {#if rendering}checking exact render…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB · {Math.round(preview.checks.lit_fraction * 100)}% lit{/if}
     </p>
     {#if preview?.checks.warnings.length}
       {#each preview.checks.warnings as w}<p class="warn small">▲ {w}</p>{/each}
@@ -407,15 +414,10 @@
   .icon { background: none; border-color: transparent; padding: 4px 6px; color: var(--muted); }
   .adds { display: flex; flex-wrap: wrap; gap: 6px; }
   .adds button, .small { font-size: 12px; padding: 4px 8px; }
-  .armed { border-color: var(--accent); color: var(--accent); }
   .center { display: grid; justify-items: center; gap: 4px; }
-  .watch {
-    width: min(100%, 420px); aspect-ratio: 1; border-radius: 50%; background: #000; padding: 10px;
-    box-shadow: 0 0 0 8px #1c1c1f, 0 0 0 9px #2c2c30; transition: opacity 0.2s;
-  }
-  .watch.busy { opacity: 0.75; }
-  .watch img { width: 100%; height: 100%; border-radius: 50%; display: block; cursor: crosshair; }
-  .placeholder { display: grid; place-items: center; height: 100%; }
+  .modes { display: flex; gap: 4px; margin-bottom: 6px; }
+  .modes button { font-size: 12px; padding: 3px 10px; background: none; }
+  .modes button.on { background: var(--surface-2); border-color: var(--faint); }
   .center-text { text-align: center; margin: 14px 0 0; }
   .small { font-size: 12px; }
   .warn { color: var(--warn); margin: 2px 0; }

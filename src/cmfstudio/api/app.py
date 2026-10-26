@@ -31,6 +31,7 @@ from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
 from ..core.jobs import JobQueue
 from ..render import describe
+from ..render import html as render_html
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
 from ..store.db import Job, Store
@@ -146,6 +147,11 @@ def create_app(
         """Render with today's data; returns checks and a base64 PNG of what the watch would show."""
         r = await need_faces().preview(spec)
         return {**r.summary(), "preview_png": base64.b64encode(r.preview_png).decode()}
+
+    @app.post("/faces/html", dependencies=[Depends(auth)])
+    async def post_face_html(spec: FaceSpec) -> dict[str, Any]:
+        """The spec as HTML with today's data, for an instant in-browser preview (exact render: /faces/preview)."""
+        return {"html": render_html.build(spec, need_faces().context())}
 
     @app.get("/faces", dependencies=[Depends(auth)])
     async def get_faces() -> dict[str, Any]:

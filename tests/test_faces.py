@@ -116,6 +116,8 @@ async def test_faces_api(faces, paired_link, tmp_path):
         assert listing["active_id"] == face_id and listing["faces"][0]["name"] == "steps"
         assert (await c.put("/insight", json={"text": "slept well"}, headers=auth)).status_code == 200
         assert faces.store.get_kv("insight") == "slept well"
+        page = (await c.post("/faces/html", json=body, headers=auth)).json()["html"]
+        assert page.startswith("<!doctype html>") and "<svg" in page  # ring track (no steps in this store)
         bad = await c.post("/faces/preview", json={"name": "x", "background": "red"}, headers=auth)
         assert bad.status_code == 422
 
