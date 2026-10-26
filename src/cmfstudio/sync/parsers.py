@@ -69,7 +69,10 @@ def _records(payload: bytes, size: int, name: str) -> list[bytes]:
 
 
 def activity(payload: bytes) -> list[Sample]:
-    """Cumulative counters (reset daily): steps, distance in m, calories in cal (not kcal)."""
+    """Cumulative counters (reset at local midnight): steps, distance in m, calories in kcal on fw 1.0.0.57.
+
+    (Spec §8.1 says cal; our watch screen agrees with kcal. Metric id kept as calories_cum_cal.)
+    """
     out = []
     for rec in _records(payload, 32, "ACTIVITY_DATA"):
         ts, steps, distance_m, calories_cal = struct.unpack_from("<IIII", rec)

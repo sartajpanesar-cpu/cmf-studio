@@ -127,7 +127,7 @@ def cmd_days(c: Client, a: argparse.Namespace) -> None:
         return
     cols = [
         ("steps", "steps", "{:.0f}"),
-        ("calories", "cal*", "{:.0f}"),
+        ("calories", "kcal", "{:.0f}"),
         ("distance_m", "km", "{:.2f}"),
         ("hr_resting", "rest", "{:.0f}"),
         ("hr_avg", "hr avg", "{:.0f}"),
@@ -150,7 +150,6 @@ def cmd_days(c: Client, a: argparse.Namespace) -> None:
             else:
                 cells.append(fmt.format(v))
         print(f"{day}  " + "".join(f"{x:>8}" for x in cells))
-    print("* calories in the watch's unit (looks like kcal; unconfirmed)")
 
 
 def cmd_reparse(c: Client, _a: argparse.Namespace) -> None:

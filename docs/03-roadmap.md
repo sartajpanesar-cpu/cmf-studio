@@ -33,26 +33,18 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 - [x] All device-writing endpoints covered by sim tests (tests/test_api.py, test_jobs.py, test_ble.py)
 
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
-**Status 2026-10-26 (where we left off):** branch `phase-2` (not merged), 85 sim tests. Working on the real watch:
-watchd auto-syncs 15 s after each connect and hourly; daily totals rebuild after each sync; `cmf sync`, `cmf samples [metric]`,
-`cmf today`, `cmf days N`, `cmf reparse`. Real frames export to gitignored `tests/fixtures/private/` (`scripts/export_fixtures.py`).
-Owner decisions: keep roadmap order (Phase 3 faces before Phase 4 UI); push to GitHub later; phone health history not needed.
-**Next session:**
-1. Owner wore the watch overnight → check `uv run cmf today` / `cmf samples` for sleep sessions; compare sleep with the watch
-   (AC: implement + document differences).
-2. Owner reads steps, calories, resting HR off the watch screens → compare with `cmf today` (AC: cross-check one day;
-   settles kcal vs cal — see findings).
-3. SpO2/stress: owner checks monitoring is on in watch settings → confirm those frames arrive (AC: land in samples).
-4. Re-run `scripts/export_fixtures.py` once sleep/SpO2/stress frames exist; tests in test_real_frames.py cover them.
-5. Buffer length (leave the Mac closed 1–3 days) can be measured later; then close Phase 2, merge, start Phase 3.
+**Status: DONE 2026-10-26** (owner decision to move on with two items deferred). watchd auto-syncs after each connect and
+hourly; daily totals; `cmf sync | samples | today | days | reparse`; real-frame fixtures stay local. One day cross-checked against
+the watch screens by the owner: identical. **Deferred:** SpO2 (no frames yet — enable blood-oxygen monitoring on the watch, then
+confirm frames land); buffer length (leave the Mac closed 1–3 days and look for gaps). Both can be checked any time without code.
 
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
 - [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
 - [x] Fixtures: real captured frames in `tests/fixtures/`, parser tests pass (owner decision 2026-10-26: real frames live in gitignored `tests/fixtures/private/`, exported by `scripts/export_fixtures.py`; tests skip without them, so CI uses synthetic frames)
-- [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress and SpO2 not yet seen)
-- [ ] Values cross-checked against the watch's own screens for one day (document discrepancies)
-- [ ] Sleep: implement, then document how it differs from the watch (known Gadgetbridge bug)
-- [ ] Measure on-watch buffer length (findings)
+- [ ] Steps, HR, stress, SpO2, resting HR land in `samples` from the real watch (steps, HR, resting HR ✓ 2026-10-25; stress ✓ 2026-10-26; **SpO2 deferred**: no frames yet, monitoring likely off)
+- [x] Values cross-checked against the watch's own screens for one day (document discrepancies) (2026-10-26, owner: identical; calories are kcal)
+- [x] Sleep: implement, then document how it differs from the watch (known Gadgetbridge bug) (2026-10-26: no difference for the first night; see findings)
+- [ ] Measure on-watch buffer length (findings) (**deferred** by owner; needs 1–3 days with the Mac closed)
 - [x] Re-sync is idempotent (no duplicate samples) (upsert on (metric, ts) + watch-side cursor; verified on device 2026-10-25)
 
 ## Phase 3 — Face pipeline · ~1 weekend

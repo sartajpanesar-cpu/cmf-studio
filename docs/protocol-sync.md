@@ -81,7 +81,7 @@ connect.
 - **The watch keeps a cursor**: a repeat fetch doesn't resend already-fetched HR; it re-sends only the
   current-hour activity record (stamped at fetch time) and a re-stamped resting-HR record (**Ours**).
 - ACTIVITY_DATA is **hourly** cumulative records; HR every 5 min while worn (**Ours**).
-- Calories appear to be **kcal**, contradicting Spec §8.1 (to confirm on the watch screen).
+- Calories are **kcal**, contradicting Spec §8.1 (owner-confirmed against the watch screen 2026-10-26).
 
 ## Open questions for our watch (Phase 2 measures these)
 
@@ -89,7 +89,7 @@ connect.
 2. ~~ACK_2 meaning~~ **Answered (Ours, 2026-10-26):** ACK_2 = the watch's latest heart-rate reading,
    `ts u32 LE ‖ bpm u8 ‖ 00 00 00` (9/12 syncs match a stored HR sample exactly). GB's "since"/"flags" naming is wrong.
 3. How long does the watch buffer data (roadmap AC: measure by leaving the Mac closed 1, 2, 3+ days)?
-4. Resting HR 5-byte layout and calorie units on fw 1.0.0.57.
+4. ~~Resting HR layout and calorie units~~ **Answered:** resting HR 5-byte layout parses; calories are kcal.
 5. ~~Sleep header totals reconcile?~~ **Yes (Ours, 2026-10-26):** records are contiguous over the session, per-stage
    sums equal the header totals, totals sum to the session length. Header bytes 16-17 still unknown.
 6. Does sync conflict with Nothing X's cursor (if the watch tracks one cursor, whoever syncs first gets the

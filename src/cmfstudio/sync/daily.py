@@ -2,8 +2,8 @@
 
 Days are local (the Mac's timezone). The watch's activity counters are cumulative and reset at local
 midnight (findings 2026-10-26: 0 at 01:00, unchanged across UTC midnight), so a day's total is the
-largest cumulative value seen that day. Calories are kept in the watch's unit (looks like kcal on fw
-1.0.0.57, unconfirmed), hence the neutral name.
+largest cumulative value seen that day. Calories are kcal on fw 1.0.0.57 (owner-confirmed against the watch
+screen 2026-10-26; spec §8.1 says cal). The metric id `calories_cum_cal` is kept for stored data.
 """
 
 from __future__ import annotations
