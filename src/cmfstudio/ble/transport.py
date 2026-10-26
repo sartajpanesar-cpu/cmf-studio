@@ -6,9 +6,11 @@ macOS CoreBluetooth addresses are per-Mac device UUIDs, not MACs.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.device import BLEDevice
 from cmfkit.transport.base import Channel, NotifyHandler
 from cmfkit.transport.ble import NAME_PREFIX, NOTIFY_UUIDS, WRITE_UUIDS
 
@@ -39,8 +41,31 @@ class BleTransport:
     def set_disconnect_handler(self, handler: Callable[[], None]) -> None:
         self._on_disconnect = handler
 
+    async def _resolve(self) -> BLEDevice | str:
+        """Find the watch without needing it to advertise.
+
+        After the Mac wakes, macOS often re-holds a system-level connection to the watch, so it stops
+        advertising and bleak's scan-based connect fails with BleakDeviceNotFoundError
+        (findings 2026-10-25). CoreBluetooth can still hand us the known peripheral by identifier.
+        """
+        if sys.platform != "darwin":
+            return self.name
+        from bleak.backends.corebluetooth.CentralManagerDelegate import CentralManagerDelegate
+        from Foundation import NSUUID
+
+        manager = CentralManagerDelegate()
+        await manager.wait_until_ready()
+        known = manager.central_manager.retrievePeripheralsWithIdentifiers_(
+            [NSUUID.alloc().initWithUUIDString_(self.name)]
+        )
+        if not known:
+            return self.name  # never seen on this Mac: fall back to scanning
+        peripheral = known[0]
+        return BLEDevice(self.name, peripheral.name(), (peripheral, manager))
+
     async def connect(self) -> None:
-        self._client = BleakClient(self.name, disconnected_callback=lambda _c: self._disconnected())
+        target = await self._resolve()
+        self._client = BleakClient(target, disconnected_callback=lambda _c: self._disconnected())
         await self._client.connect()
         available = {c.uuid for s in self._client.services for c in s.characteristics}
         for channel, uuid in NOTIFY_UUIDS.items():
