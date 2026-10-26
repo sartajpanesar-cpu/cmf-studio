@@ -16,6 +16,7 @@ from .bindings import Context, metric_value, resolve
 from .spec import SIZE, CircleLayer, FaceSpec, ImageLayer, RectLayer, RingLayer, TextLayer
 
 FONT_FORMATS = {".ttf": "truetype", ".otf": "opentype", ".woff": "woff", ".woff2": "woff2"}
+DEFAULT_FONTS = "-apple-system,'Helvetica Neue',sans-serif"  # page default; also every layer's fallback
 MIME_FORMATS = {"font/ttf": "truetype", "font/otf": "opentype", "font/woff": "woff", "font/woff2": "woff2"}
 
 
@@ -81,7 +82,7 @@ def _text(layer: TextLayer, ctx: Context) -> str:
         "line-height:1.1",
     ]
     if layer.font:
-        style.append(f"font-family:'{layer.font}',sans-serif")
+        style.append(f"font-family:'{layer.font}',{DEFAULT_FONTS}")
     if layer.max_width:
         style.append(f"width:{layer.max_width}px")
     else:
@@ -155,5 +156,5 @@ def build(spec: FaceSpec, ctx: Context, base_dir: Path | str = ".") -> str:
 <html><head><meta charset="utf-8">{links}
 <style>{faces}
 html,body{{margin:0;padding:0;width:{SIZE}px;height:{SIZE}px;overflow:hidden;background:{spec.background};
-font-family:-apple-system,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased}}</style>
+font-family:{DEFAULT_FONTS};-webkit-font-smoothing:antialiased}}</style>
 </head><body>{"".join(body)}</body></html>"""

@@ -147,3 +147,48 @@ def test_render_pipeline_end_to_end(tmp_path):
     assert r.checks["background_black"]
     Image.open(io.BytesIO(r.preview_png)).verify()
     struct.unpack("<I", r.blob[4:8])
+
+
+SYSTEM_TTF = "/System/Library/Fonts/Supplemental/Apple Chancery.ttf"
+SYSTEM_OTF = "/System/Library/Fonts/Supplemental/NotoSansJavanese-Regular.otf"
+
+
+@needs_browser
+@pytest.mark.parametrize("font_path", [SYSTEM_TTF, SYSTEM_OTF])
+def test_local_font_is_used(font_path, tmp_path):
+    """A local font must actually change the glyphs (not silently fall back), also after inlining."""
+    from pathlib import Path
+
+    from cmfstudio.render.html import inline_assets
+    from cmfstudio.render.pipeline import render
+
+    if not Path(font_path).exists():
+        pytest.skip("system font not present")
+    text = {"type": "text", "text": "Hello 123 Quartz", "size": 44}
+    # same family name, font not loaded: identical to the page fallback (see the control test below)
+    plain = FaceSpec.model_validate({"name": "plain", "layers": [{**text, "font": "Mine"}]})
+    custom = FaceSpec.model_validate(
+        {
+            "name": "custom",
+            "fonts": [{"family": "Mine", "source": "local", "path": font_path}],
+            "layers": [{**text, "font": "Mine"}],
+        }
+    )
+    inlined = inline_assets(custom, "/")
+    assert inlined.fonts[0].path.startswith("data:font/")
+    a = np.asarray(asyncio.run(render(plain, CTX, tmp_path)).watch).astype(int)
+    b = np.asarray(asyncio.run(render(inlined, CTX, tmp_path)).watch).astype(int)
+    assert (np.abs(a - b).sum(axis=-1) > 60).mean() > 0.005, "glyphs identical: font didn't load"
+
+
+@needs_browser
+def test_unloaded_font_falls_back_identically(tmp_path):
+    """Control for test_local_font_is_used: naming a font that isn't loaded changes nothing."""
+    from cmfstudio.render.pipeline import render
+
+    text = {"type": "text", "text": "Hello 123 Quartz", "size": 44}
+    plain = FaceSpec.model_validate({"name": "plain", "layers": [text]})
+    missing = FaceSpec.model_validate({"name": "missing", "layers": [{**text, "font": "NotLoaded"}]})
+    a = np.asarray(asyncio.run(render(plain, CTX, tmp_path)).watch).astype(int)
+    b = np.asarray(asyncio.run(render(missing, CTX, tmp_path)).watch).astype(int)
+    assert (np.abs(a - b).sum(axis=-1) > 60).mean() < 0.0005

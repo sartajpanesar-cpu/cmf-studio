@@ -35,7 +35,7 @@ run `uv run cmf pair`. Agent: `bash scripts/launchd.sh status|logs|uninstall`.
 ## Phase 2 — Health sync (critical path) · 1–2 weekends
 **Status: DONE 2026-10-26** (owner decision to move on with two items deferred). watchd auto-syncs after each connect and
 hourly; daily totals; `cmf sync | samples | today | days | reparse`; real-frame fixtures stay local. One day cross-checked against
-the watch screens by the owner: identical. **Deferred:** buffer length (leave the Mac closed 1–3 days and look for gaps). Both can be checked any time without code.
+the watch screens by the owner: identical. **Deferred:** buffer length (leave the Mac closed 1–3 days and look for gaps); it can be checked any time without code.
 
 - [x] Map Gadgetbridge's CMF sync code (opcodes, request sequence, payload layouts) into `docs/protocol-sync.md` with file/line refs (2026-10-26, cross-checked with spec §8)
 - [x] Port parsers to `sync/`; raw frames stored before parsing (written from docs/protocol-sync.md, not translated from Gadgetbridge's AGPL code)
@@ -48,12 +48,12 @@ the watch screens by the owner: identical. **Deferred:** buffer length (leave th
 
 ## Phase 3 — Face pipeline · ~1 weekend
 See `06-studio-design-pipeline.md`.
-- [ ] Face spec format (JSON) + HTML template renderer
-- [ ] Playwright render → 466×466 PNG → RGB565 with dithering → cmfkit encoder
-- [ ] Round-mask preview + AMOLED black check
-- [ ] Data bindings refresh on each sync (steps, date, resting HR, "insight" text)
-- [ ] Any Google Font / local .ttf works
-- [ ] Document what the face format supports natively (live time digits? which fields?) vs baked-in
+- [x] Face spec format (JSON) + HTML template renderer (`render/spec.py`, `render/html.py`)
+- [x] Playwright render → 466×466 PNG → RGB565 with dithering → cmfkit encoder (installed on the watch 2026-10-26)
+- [x] Round-mask preview + AMOLED black check (`cmf face preview`)
+- [x] Data bindings refresh on each sync (steps, date, resting HR, "insight" text) (verified on device: jobs 41–43)
+- [x] Any Google Font / local .ttf works (Google: Poiret One on device; local .ttf/.otf: tests with a not-loaded control)
+- [x] Document what the face format supports natively (live time digits? which fields?) vs baked-in (docs/06 table)
 
 ## Phase 4 — Studio + Health UI · 2–3 weekends
 - [ ] Svelte app served by watchd
