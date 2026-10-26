@@ -1,0 +1,15 @@
+{
+  "name": "deco-steps",
+  "background": "#000000",
+  "fonts": [{"family": "Poiret One", "source": "google", "weights": [400]}],
+  "clock": {"style": 0, "x": 140, "y": 150, "color": "#E8C66A"},
+  "layers": [
+    {"type": "ring", "bind": "metric:steps", "max": 8000, "r": 218, "width": 8, "color": "#E8C66A", "track": "#1a1a1a"},
+    {"type": "text", "bind": "date:%a %d %b", "x": 233, "y": 108, "font": "Poiret One", "size": 30, "color": "#E8C66A", "letterSpacing": 2},
+    {"type": "text", "bind": "metric:steps", "x": 233, "y": 318, "font": "Poiret One", "size": 54},
+    {"type": "text", "bind": "static:STEPS", "x": 233, "y": 356, "size": 13, "color": "#8a8a8a", "letterSpacing": 4},
+    {"type": "text", "bind": "metric:hr_resting", "x": 160, "y": 398, "size": 18, "color": "#d0d0d0"},
+    {"type": "text", "bind": "metric:sleep", "x": 306, "y": 398, "size": 18, "color": "#d0d0d0"}
+  ],
+  "refresh": "on_sync"
+}
