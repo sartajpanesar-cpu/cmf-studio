@@ -542,10 +542,9 @@ def _tidy(dial: NativeDial, show_date: bool, show_data: bool) -> list[tuple[str,
             dial.move(g["frame"], x, DATA_ROW_Y)
             source = next((c["src"] for c in g["children"] if c["tag"] == 0x60), 0)
             labels.append((LABELS.get(source, ""), x + w // 2, DATA_ROW_Y + fh + 4))
-            for c in g["children"]:  # the "–" placeholder icons (the store face's art was removed)
+            for c in g["children"]:  # the "–" placeholder icons: 1 px, so they don't push the number off the frame
                 if c["tag"] == 0x30 and len(c["frames"]) == 1:
-                    a = c["frames"][0]
-                    dial.replace(a, np.zeros((a.h, a.w, 4), dtype=np.uint8))
+                    dial.replace(c["frames"][0], np.zeros((1, 1, 4), dtype=np.uint8), resize=True)
             x += w + gap
     return [lbl for lbl in labels if lbl[0]]
 

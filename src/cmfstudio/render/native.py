@@ -91,6 +91,7 @@ class NativeDial:
         self._new: dict[int, bytes] = {}  # asset offset -> new LZ4 block
         self._moves: dict[int, tuple[int, int]] = {}  # 0x01 struct body offset -> new (x, y)
         self._bytes: dict[int, int] = {}  # absolute scene offset -> new byte value
+        self._dims: dict[int, tuple[int, int]] = {}  # asset offset -> new (w, h) after a resizing replace
 
     # -- structure ---------------------------------------------------------------------------------------------
 
@@ -181,13 +182,18 @@ class NativeDial:
     def decode(self, asset: Asset) -> np.ndarray:
         """RGBA uint8 (h, w, 4) — the replacement if one was set, else the template's image."""
         block = self._new.get(asset.off) or self.b[asset.off + 8 : asset.off + 8 + asset.len]
-        raw = lz4.block.decompress(block, uncompressed_size=decoded_size(asset.cf, asset.w, asset.h))
-        return raster_to_rgba(raw, asset.cf, asset.w, asset.h)
+        w, h = self._dims.get(asset.off, (asset.w, asset.h))
+        raw = lz4.block.decompress(block, uncompressed_size=decoded_size(asset.cf, w, h))
+        return raster_to_rgba(raw, asset.cf, w, h)
 
-    def replace(self, asset: Asset, rgba: np.ndarray) -> int:
-        """Use ``rgba`` (h, w, 4) for ``asset`` (same size and format). Returns the compressed size."""
-        if rgba.shape[:2] != (asset.h, asset.w):
-            raise NativeFormatError(f"image is {rgba.shape[1]}×{rgba.shape[0]}, slot is {asset.w}×{asset.h}")
+    def replace(self, asset: Asset, rgba: np.ndarray, resize: bool = False) -> int:
+        """Use ``rgba`` (h, w, 4) for ``asset`` (same format; same size unless ``resize``). Returns the compressed
+        size. Resizing only suits images a layout positions automatically (e.g. group children)."""
+        h, w = rgba.shape[:2]
+        if (h, w) != (asset.h, asset.w):
+            if not resize:
+                raise NativeFormatError(f"image is {w}×{h}, slot is {asset.w}×{asset.h}")
+            self._dims[asset.off] = (w, h)
         block = compress(rgba_to_raster(rgba, asset.cf))
         self._new[asset.off] = block
         return len(block)
@@ -234,7 +240,11 @@ class NativeDial:
             a = self.assets[off]
             block = self._new.get(off, b[off + 8 : off + 8 + a.len])
             moved[off] = (old_first + len(pool), 8 + len(block))
-            pool += struct.pack("<II", _u32(b, off), len(block)) + block
+            dims = _u32(b, off)
+            if off in self._dims:
+                w, h = self._dims[off]
+                dims = (a.cf & 0x1F) | (w << 10) | (h << 21)
+            pool += struct.pack("<II", dims, len(block)) + block
             pos = off + 8 + a.len
         if any(b[pos:end]):
             raise NativeFormatError(f"unrecognised data at the end of the asset pool ({pos:#x})")
@@ -275,7 +285,7 @@ class NativeDial:
             raise NativeFormatError("rebuilt scene lost ref tails")
         for old, new in zip(self.tails, check.tails, strict=True):
             for a, z in zip(self.chain(old), check.chain(new), strict=True):  # chain() raises on a bad pointer
-                if (a.cf, a.w, a.h) != (z.cf, z.w, z.h):
+                if (a.cf, *self._dims.get(a.off, (a.w, a.h))) != (z.cf, z.w, z.h):
                     raise NativeFormatError(f"ref tail at {old.at:#x} now points at a different image")
 
 
