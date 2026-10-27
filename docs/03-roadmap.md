@@ -73,10 +73,17 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 1. ~~Custom time font~~ → Phase 5b (native faces).
 2. Widgets / quick-card editor (deferred: no Gadgetbridge code; only opcode FFFF 906D known).
 3. Measure on-watch buffer length (Phase 2 deferred).
+4. Moving graphics on native faces (owner, 2026-10-27: later). No autoplay — stock animations are firmware
+   `res_e.bin` `.ajs` (Tier 3). In-scope options from the spec's editor (unverified on device): re-skin a
+   seconds/minute hand (spin, orbit, walk), value-driven frame sheets (1 fps flipbook by seconds, hourly scenes),
+   progress rings. First step: find a template with a seconds hand or frame sheet; sim, then one test install.
+5. Phase 5 close-out checks (owner, on the watch): REST vs resting HR (data id 0x60); record a workout; watch
+   watchd.log for "MTU stuck" to confirm the long-write fallback.
 
 ## Phase 5 — MCP + automations · ~1 weekend
 - [x] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code (`.mcp.json` → `cmf-mcp`;
-  verified over stdio against the real watchd 2026-10-26)
+  verified over stdio against the real watchd 2026-10-26). The VS Code extension never shows the project-server
+  approval prompt, so on this Mac it's also registered at local scope (`claude mcp add -s local`, 2026-10-27)
 - [x] Rules engine: on-sync → re-render face; job-done → notify; button → action (`core/rules.py`, owner-edited
   `rules.json` in watchd's app dir, example `docs/rules.example.json`, `cmf rules [--reload]`). Closed action set:
   notify (with today's stats), sync, refresh_face, run a macOS Shortcut by name. Verified on the real watch 2026-10-26:
