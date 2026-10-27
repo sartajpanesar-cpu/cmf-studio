@@ -206,8 +206,10 @@ class NativeService:
                 return old, candidate
         raise LookupError("no free dial id to install under")
 
-    async def install(self, face_id: int, replace: int | None = None) -> dict[str, Any]:
+    async def install(self, face_id: int, replace: int | None = None, as_id: int | None = None) -> dict[str, Any]:
         old_id, new_id = self.plan(face_id, replace)
+        if as_id is not None:  # research: choose the id explicitly (e.g. re-use the old one)
+            new_id = as_id
         result = await self.build(self.spec(face_id))
         self.faces_dir.mkdir(parents=True, exist_ok=True)
         bin_path = self.faces_dir / f"native-{face_id}-{new_id}.bin"

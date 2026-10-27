@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 import anthropic
 import httpx
+from cmfkit.protocol import opcodes as ops
 from cmfkit.watchface import photo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -383,6 +384,7 @@ def create_app(
         face_id: int,
         confirm: bool = Query(False, description="required: replaces a face on the watch"),
         replace: int | None = Query(None, description="stock dial id to replace (first install only)"),
+        as_id: int | None = Query(None, description="research: the dial id to install as (default: alternate)"),
     ) -> dict[str, Any]:
         if not confirm:
             raise HTTPException(
@@ -392,7 +394,7 @@ def create_app(
             need_native().spec(face_id)
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such native face") from None
-        return await native_call(need_native().install(face_id, replace))
+        return await native_call(need_native().install(face_id, replace, as_id))
 
     @app.get("/watch/dials", dependencies=[Depends(auth)])
     async def get_watch_dials() -> dict[str, Any]:
@@ -542,6 +544,19 @@ def create_app(
         }
         store.add_event("settings_raw", result)
         return result
+
+    @app.post("/watch/dials/query", dependencies=[Depends(auth)])
+    async def post_dials_query() -> dict[str, Any]:
+        """Research, read-only: DIAL_COMMAND type 0 (spec §11.1 "query the list"), raw reply."""
+        try:
+            async with link.exclusive() as session:
+                reply = await session.request(ops.DIAL_COMMAND_SET, b"\x00", ops.DIAL_COMMAND_RET, timeout=3)
+        except TimeoutError:
+            return {"reply": None}
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        store.add_event("dials_query", {"reply": reply.payload.hex()})
+        return {"reply": reply.payload.hex()}
 
     @app.post("/settings/probe", dependencies=[Depends(auth)])
     async def post_settings_probe() -> dict[str, Any]:
