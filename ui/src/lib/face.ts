@@ -19,8 +19,23 @@ export type RingLayer = {
 export type Layer = TextLayer | ImageLayer | CircleLayer | RectLayer | RingLayer;
 export type FontRef = { family: string; source: "google" | "local" | "system"; path?: string | null; weights: number[] };
 export type Clock = { style: number; x: number; y: number; color: string };
+// "Your font" clock: the watch draws the time in this font, from one of the native layouts (render/native_face.py)
+export type NativeClock = {
+  template: 362 | 359 | 288; font: FontRef | null; weight: number; digit_color: string | null;
+  show_date: boolean; show_data: boolean; center_time: boolean;
+};
+export const LAYOUTS: { id: 362 | 359 | 288; name: string; description: string }[] = [
+  { id: 362, name: "Steady", description: "huge hours and minutes either side" },
+  { id: 359, name: "Ring Data", description: "time in the middle" },
+  { id: 288, name: "Type", description: "big hours and minutes, lower half" },
+];
+export const newNativeClock = (color = "#ffffff"): NativeClock => ({
+  template: 362, font: { family: "Orbitron", source: "google", weights: [600] }, weight: 600, digit_color: color,
+  show_date: false, show_data: false, center_time: true,
+});
 export type FaceSpec = {
   version: 0; name: string; background: string; fonts: FontRef[]; layers: Layer[]; clock: Clock; refresh: "on_sync" | "manual";
+  nativeClock?: NativeClock | null;
 };
 
 export const blankFace = (): FaceSpec => ({

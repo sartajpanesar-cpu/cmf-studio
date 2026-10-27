@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import datetime as dt
+import io
 import struct
 from pathlib import Path
 
@@ -257,3 +258,53 @@ def test_chosen_colour_beats_the_watch_accent_tint(n):
     assert flagged == []
     kept = NativeDial(asyncio.run(build(NativeSpec(template=n))).blob)  # template colour: the watch's accent stays
     assert any(kept.b[t.at - 0x12 + 11] == 4 for t in kept.tails if not t.aod)
+
+
+# -- Studio designs with a font clock ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def studio_api(paired_link, watch, tmp_path):
+    from cmfstudio.render.service import FaceService
+
+    store = Store(":memory:")
+    queue = JobQueue(store, paired_link, retry_s=0.01)
+    queue.start()
+    faces = FaceService(store, paired_link, queue, tmp_path / "faces")
+    native = NativeService(store, paired_link, queue, tmp_path / "faces", faces)
+    faces.native = native
+    app = create_app(paired_link, queue, store, "t", tmp_path, faces=faces, native=native)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", headers={"Authorization": "Bearer t"}
+    ) as c:
+        yield c, watch, faces
+    await queue.stop()
+
+
+DESIGN = {
+    "name": "red-disc",
+    "layers": [{"type": "circle", "cx": 233, "cy": 233, "r": 180, "fill": "#cc2222", "stroke": None}],
+    "nativeClock": {"template": 288, "digit_color": "#ffffff"},
+}
+
+
+@needs_templates
+@needs_browser
+async def test_design_with_font_clock_previews_and_installs_as_native(studio_api):
+    c, watch, faces = studio_api
+    overlay = (await c.post("/faces/native-clock", json=DESIGN)).json()
+    from PIL import Image as PILImage
+
+    img = np.asarray(PILImage.open(io.BytesIO(base64.b64decode(overlay["overlay_png"]))).convert("RGBA"))
+    assert img[..., 3].min() == 0 and img[..., 3].max() == 255, "transparent except the clock"
+    full = (await c.post("/faces/native-clock", params={"full": True}, json=DESIGN)).json()
+    face_img = np.asarray(PILImage.open(io.BytesIO(base64.b64decode(full["preview_png"]))).convert("RGB"))
+    assert tuple(face_img[233, 60]) != (0, 0, 0), "the design is the background"
+
+    face_id = (await c.post("/faces", json=DESIGN)).json()["id"]
+    r = (await c.post(f"/faces/{face_id}/install", params={"confirm": True})).json()
+    assert r["native"] and r["installs_as"] == 288 and r["job"]["state"] == "done"
+    assert watch.state.dials[-1] == 288 and validate(watch.native[288]) == []
+    again = await c.post(f"/faces/{face_id}/install", params={"confirm": True})
+    assert again.status_code == 409, "the watch won't overwrite the layout"
+    assert await faces.refresh_after_sync() is None, "no auto-refresh for native faces"

@@ -217,6 +217,8 @@ def create_app(
             result = await need_faces().install(face_id, force=force)
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such face") from None
+        except LookupError as exc:  # native: layout already on the watch, watch full, …
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if "job" in result and link.connected.is_set():
             try:
                 job = await queue.wait(result["job"]["id"], WAIT_S)
@@ -224,6 +226,14 @@ def create_app(
             except TimeoutError:
                 pass
         return result
+
+    @app.post("/faces/native-clock", dependencies=[Depends(auth)])
+    async def post_face_native_clock(spec: FaceSpec, full: bool = False) -> dict[str, Any]:
+        """The design's font clock as the watch will draw it: alone on a transparent canvas (to lay over the live
+        preview), or with ``full`` the whole native face."""
+        if spec.native_clock is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "this design uses a built-in clock style")
+        return await native_call(need_native().design_preview(spec, overlay_only=not full))
 
     @app.post("/faces/describe", dependencies=[Depends(auth)])
     async def post_face_describe(body: DescribeIn) -> dict[str, Any]:

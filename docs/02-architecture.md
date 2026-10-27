@@ -29,7 +29,7 @@ The watch accepts **one BLE connection**. So exactly one long-running process â€
 | `api` | REST + websocket; bearer token stored in Keychain; binds 127.0.0.1 only | core, store, render |
 | `mcp` | Tools below; calls the api, never BLE | api |
 | `cli` | Thin client over api (`cmf status`, `cmf sync`, `cmf face push`, `cmf notify`) | api |
-| `ui` | Health, Studio (photo faces), Native (your font), Settings, Watch tabs | api |
+| `ui` | Health, Studio (one editor: photo faces with a built-in clock, or native faces with your font), Settings, Watch | api |
 
 ## Data model (as implemented in `store/db.py`, migration 1)
 ```sql

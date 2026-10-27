@@ -234,6 +234,25 @@ class NativeService:
             "render": result.summary(),
         }
 
+    async def install_design(self, face_id: int, design) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+        """A Studio design with a font clock: a native face with the design as its background, installed."""
+        native_id = self.save(native_face.spec_from_clock(design.native_clock, f"studio-{design.name}", face_id))
+        result = await self.install(native_id)
+        return {**result, "native": True, "native_face_id": native_id}
+
+    async def design_preview(self, design, overlay_only: bool = False) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+        """Preview an unsaved Studio design's font clock: the clock alone (transparent) or the whole native face."""
+        clock = design.native_clock
+        spec = native_face.spec_from_clock(clock, design.name)
+        if overlay_only:
+            png = await native_face.clock_overlay(spec, self.values())
+            return {"overlay_png": base64.b64encode(png).decode(), "template": clock.template}
+        if self.photo_faces is None:
+            raise LookupError("photo faces aren't available")
+        background = (await self.photo_faces.preview(design.model_copy(update={"native_clock": None}))).watch
+        result = await native_face.build(spec.model_copy(update={"background": None}), background, self.values())
+        return preview_payload(result)
+
     def _job_done(self, job: Job) -> None:
         if job.kind != "install_native" or job.state != "done":
             return

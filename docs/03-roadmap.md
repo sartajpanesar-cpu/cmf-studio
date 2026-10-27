@@ -99,7 +99,10 @@ item: sim/fixture tests first, then the web UI, then a check on the watch. Nothi
   inserted where a layout has none). Verified on the watch 2026-10-26: Studio design behind Type, a photo behind Ring
   Data; chosen digit colour beats the watch's accent tint. Installs add a face (no in-place update; remove on the
   watch first)
-- [ ] Merge Studio and Native into one editor (clock: built-in styles or your font)
+- [x] Merge Studio and Native into one editor: Studio's Clock is "Built-in style" or "Your font" (layout, font gallery,
+  colour, date/data/centre). Your-font designs preview live with the watch-drawn clock overlaid, render exactly, and
+  install as a native face with the design as background (add-only; the editor says when a layout is already on the
+  watch or it's full). The separate Native tab is gone
 - [x] Weather push (+ the city line as a glance: place, text, or a Shortcut's output e.g. next calendar event).
   Open-Meteo, every 30 min while enabled. Displayed on the watch (owner check 2026-10-26)
 - [x] Settings through watchd / UI / MCP. Probed the watch's own values first; every write verified by read-back.

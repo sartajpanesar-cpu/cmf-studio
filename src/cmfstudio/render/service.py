@@ -30,6 +30,7 @@ class FaceService:
         self.link = link
         self.queue = queue
         self.faces_dir = faces_dir
+        self.native = None  # NativeService, set by watchd: designs with a font clock install as native faces
         queue.on_done.append(self._job_done)
 
     def context(self) -> Context:
@@ -52,6 +53,10 @@ class FaceService:
 
     async def install(self, face_id: int, *, force: bool = False, auto: bool = False) -> dict[str, Any]:
         spec = self.spec(face_id)
+        if spec.native_clock is not None:
+            if self.native is None:
+                raise LookupError("native faces aren't available")
+            return await self.native.install_design(face_id, spec)
         rendered = await self.preview(spec)
         if not force and rendered.digest == self.store.get_face(face_id)["last_digest"]:
             return {"skipped": "unchanged", "digest": rendered.digest}
@@ -89,7 +94,8 @@ class FaceService:
         face_id = self.active_id()
         if face_id is None:
             return None
-        if self.spec(face_id).refresh != "on_sync":
+        spec = self.spec(face_id)
+        if spec.refresh != "on_sync" or spec.native_clock is not None:  # the watch can't update native faces in place
             return None
         if self.link.custom_face_active is False:
             # the owner picked another face on the watch; re-installing would switch it back

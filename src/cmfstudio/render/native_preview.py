@@ -48,8 +48,10 @@ def sample_values(now: dt.datetime | None = None, metrics: dict[str, Any] | None
     return v
 
 
-def render(dial: NativeDial, values: dict[int, int], aod: bool = False) -> Image.Image:
-    canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 255))
+def render(dial: NativeDial, values: dict[int, int], aod: bool = False, transparent: bool = False) -> Image.Image:
+    """``transparent``: no backdrop and no full-screen background images — just the widgets."""
+    canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0 if transparent else 255))
+    backgrounds = {a.off for a in dial.backgrounds(aod)} if transparent else set()
     tails = {t.at: t for t in dial.tails}
     b = dial.b
 
@@ -79,7 +81,10 @@ def render(dial: NativeDial, values: dict[int, int], aod: bool = False) -> Image
                 digits = b[cbody]
         if not st or not st["tail"]:
             return st, [], digits
-        return st, [_image(dial, a) for a in dial.chain(st["tail"])], digits
+        chain = dial.chain(st["tail"])
+        if any(a.off in backgrounds for a in chain):
+            return st, [], digits
+        return st, [_image(dial, a) for a in chain], digits
 
     def draw_node(tag: int, body: int, n: int, origin: tuple[int, int] | None = None) -> tuple[int, int]:
         """Draw one 0x30/0x60 node; returns its drawn size. ``origin`` overrides x/y (auto-layout)."""

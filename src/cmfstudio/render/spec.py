@@ -136,6 +136,19 @@ class RingLayer(BaseModel):
 Layer = Annotated[TextLayer | ImageLayer | CircleLayer | RectLayer | RingLayer, Field(discriminator="type")]
 
 
+class NativeClock(BaseModel):
+    """Instead of a built-in clock style, the watch draws the time in this font (a native face built from one of
+    the template layouts, with the rest of the design as its background; render/native_face.py)."""
+
+    template: Literal[362, 359, 288] = 362
+    font: FontRef | None = None
+    weight: int = Field(600, ge=100, le=900)
+    digit_color: Color | None = "#ffffff"
+    show_date: bool = False
+    show_data: bool = False
+    center_time: bool = True
+
+
 class FaceSpec(BaseModel):
     version: Literal[0] = 0
     name: str = Field(min_length=1, max_length=60)
@@ -144,3 +157,6 @@ class FaceSpec(BaseModel):
     layers: list[Layer] = []
     clock: Clock = Clock()
     refresh: Literal["on_sync", "manual"] = "on_sync"
+    native_clock: NativeClock | None = Field(None, alias="nativeClock")
+
+    model_config = {"populate_by_name": True}

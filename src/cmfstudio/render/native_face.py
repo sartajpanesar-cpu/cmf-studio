@@ -106,7 +106,61 @@ async def build(
         data = add_background(data)  # Steady / Type draw black behind the time: give them a background image
     dial = NativeDial(data)
     warnings: list[str] = []
-    glyphs = await render_digits(spec.font, spec.weight) if spec.font else None
+    await _apply_clock(dial, spec)
+
+    if bg_rgba is not None:
+        for bg in dial.backgrounds():
+            dial.replace(bg, bg_rgba)
+
+    preview_png, preview = await asyncio.to_thread(_preview, dial, values or native_preview.sample_values())
+    for thumb in dial.thumbnails():
+        small = preview.convert("RGB").resize((thumb.w, thumb.h), Image.Resampling.LANCZOS)
+        dial.replace(thumb, np.asarray(small.convert("RGBA")))
+    blob = dial.build()
+    return NativeResult(blob, preview_png, warnings, spec.template)
+
+
+async def clock_overlay(spec: NativeSpec, values: dict[int, int] | None = None) -> bytes:
+    """Just the firmware-drawn widgets (time, and date / data if shown) on a transparent canvas — for laying the
+    native clock over a live design preview."""
+    dial = NativeDial(template_path(spec.template).read_bytes())
+    await _apply_clock(dial, spec)
+    img = native_preview.render(dial, values or native_preview.sample_values(), transparent=True)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def spec_from_clock(clock, name: str, background_face_id: int | None = None) -> NativeSpec:  # type: ignore[no-untyped-def]
+    return NativeSpec(
+        name=name[:60],
+        template=clock.template,
+        font=clock.font,
+        weight=clock.weight,
+        digit_color=clock.digit_color,
+        background=None if background_face_id is not None else "#000000",
+        background_face_id=background_face_id,
+        show_date=clock.show_date,
+        show_data=clock.show_data,
+        center_time=clock.center_time,
+    )
+
+
+_GLYPHS: dict[str, list[np.ndarray]] = {}
+
+
+async def _glyphs(font: FontRef, weight: int) -> list[np.ndarray]:
+    key = f"{font.model_dump_json()}|{weight}"
+    if key not in _GLYPHS:
+        if len(_GLYPHS) > 24:
+            _GLYPHS.clear()
+        _GLYPHS[key] = await render_digits(font, weight)
+    return _GLYPHS[key]
+
+
+async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> None:
+    """Font, colour, accent, centring and hidden widgets — everything but the background."""
+    glyphs = await _glyphs(spec.font, spec.weight) if spec.font else None
 
     for table, frames in dial.digit_sets():
         colour = None if table.aod else spec.digit_color
@@ -134,17 +188,6 @@ async def build(
     hidden |= {"data"} if not spec.show_data else set()
     if hidden:
         _hide(dial, hidden)
-
-    if bg_rgba is not None:
-        for bg in dial.backgrounds():
-            dial.replace(bg, bg_rgba)
-
-    preview_png, preview = await asyncio.to_thread(_preview, dial, values or native_preview.sample_values())
-    for thumb in dial.thumbnails():
-        small = preview.convert("RGB").resize((thumb.w, thumb.h), Image.Resampling.LANCZOS)
-        dial.replace(thumb, np.asarray(small.convert("RGBA")))
-    blob = dial.build()
-    return NativeResult(blob, preview_png, warnings, spec.template)
 
 
 # -- glyphs ---------------------------------------------------------------------------------------------------------

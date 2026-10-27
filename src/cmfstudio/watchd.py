@@ -89,6 +89,7 @@ async def serve(args: argparse.Namespace) -> None:
     queue = JobQueue(store, link, handlers={"sync": lambda lk, _args: sync.fetch(lk)})
     faces = FaceService(store, link, queue, APP_DIR / "faces")
     native = NativeService(store, link, queue, APP_DIR / "faces", faces)
+    faces.native = native
     weather = WeatherService(store, queue)
     settings = SettingsService(link, store)
     finder = FindPhone(store)

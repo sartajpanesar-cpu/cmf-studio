@@ -1,8 +1,9 @@
 <script lang="ts">
   import { get, post } from "../lib/api";
+  import FontGallery from "../lib/FontGallery.svelte";
   import LivePreview from "../lib/LivePreview.svelte";
   import {
-    BINDINGS, GOOGLE_FONTS, RING_METRICS, SIZE, blankFace, layerTitle, newLayer,
+    BINDINGS, GOOGLE_FONTS, LAYOUTS, RING_METRICS, SIZE, blankFace, layerTitle, newLayer, newNativeClock,
     type FaceSpec, type Layer,
   } from "../lib/face";
 
@@ -66,6 +67,31 @@
   let clockSvg = $state("");
   let clockBox = $state<[number, number, number, number] | null>(null);
   let mode = $state<"live" | "exact">("live");
+  // "Your font" clock: the watch-drawn widgets as a transparent overlay on the live design preview
+  let overlayPng = $state<string | null>(null);
+  let overlaySeq = 0;
+  let overlayTimer: ReturnType<typeof setTimeout> | undefined;
+  let dials = $state<{ known: boolean; max?: number; dials: { id: number; name: string; kind: string }[] }>({ known: false, dials: [] });
+  const fontClock = $derived(spec.nativeClock ?? null);
+  const layoutName = $derived(LAYOUTS.find((l) => l.id === fontClock?.template)?.name ?? "");
+  const layoutOnWatch = $derived(!!fontClock && dials.dials.some((d) => d.id === fontClock.template));
+  const watchFull = $derived(dials.known && dials.dials.length >= (dials.max ?? 7));
+  get("/watch/dials").then((d) => (dials = d)).catch(() => {});
+  $effect(() => {
+    const clock = JSON.stringify(spec.nativeClock ?? null);
+    clearTimeout(overlayTimer);
+    if (clock === "null") { overlayPng = null; return; }
+    overlayTimer = setTimeout(async () => {
+      const mine = ++overlaySeq;
+      try {
+        const r = await post("/faces/native-clock", { ...withFonts(spec), nativeClock: JSON.parse(clock) });
+        if (mine === overlaySeq) overlayPng = `data:image/png;base64,${r.overlay_png}`;
+      } catch (e: any) {
+        if (mine === overlaySeq) error = e.message;
+      }
+    }, 300);
+  });
+  const overlaySvg = $derived(overlayPng ? `<img src="${overlayPng}" width="466" height="466" alt="" style="display:block">` : "");
   $effect(() => {
     const snapshot = JSON.stringify(spec); // tracks every nested change
     try { localStorage.setItem("cmf-studio-draft", snapshot); } catch { /* draft is a convenience */ }
@@ -89,6 +115,13 @@
     const mine = ++seq;
     rendering = true;
     try {
+      if (s.nativeClock) {  // the whole native face: design as background + watch-drawn clock
+        const r = await post("/faces/native-clock?full=true", withFonts(s));
+        if (mine !== seq) return;
+        preview = { png: `data:image/png;base64,${r.preview_png}`, checks: { lit_fraction: 0, warnings: r.warnings }, bytes: r.bytes };
+        error = null;
+        return;
+      }
       const r = await post("/faces/preview", withFonts(s));
       if (mine !== seq) return;
       preview = { png: `data:image/png;base64,${r.preview_png}`, checks: r.checks, bytes: r.bytes };
@@ -135,7 +168,11 @@
     if (id == null) { installing = false; return; }
     try {
       const r = await post(`/faces/${id}/install?confirm=true&force=true`);
-      notice = r.job?.state === "done" ? "Installed — it's on your watch now." : `Install ${r.job?.state ?? "queued"}: it runs when the watch connects.`;
+      const done = r.job?.state === "done";
+      notice = r.native
+        ? (done ? `Added to your watch as a ${layoutName} face and showing now.` : `Install ${r.job?.state}: ${r.job?.error ?? "it runs when the watch connects."}`)
+        : (done ? "Installed — it's on your watch now." : `Install ${r.job?.state ?? "queued"}: it runs when the watch connects.`);
+      get("/watch/dials").then((d) => (dials = d)).catch(() => {});
     } catch (e: any) {
       error = e.message;
     } finally {
@@ -271,22 +308,44 @@
       </div>
     </div>
 
-    <h3>Live clock <span class="faint">(drawn by the watch)</span></h3>
-    <div class="row2">
-      <div class="field"><span>Style</span>
-        <select bind:value={spec.clock.style}>{#each clockStyles as s}<option value={s}>Style {s + 1}</option>{/each}</select>
+    <h3>Clock <span class="faint">(drawn by the watch)</span></h3>
+    <div class="seg">
+      <button class:on={!fontClock} onclick={() => (spec.nativeClock = null)}>Built-in style</button>
+      <button class:on={!!fontClock} onclick={() => (spec.nativeClock = spec.nativeClock ?? newNativeClock(spec.clock.color))}>Your font</button>
+    </div>
+    {#if !fontClock}
+      <div class="row2">
+        <div class="field"><span>Style</span>
+          <select bind:value={spec.clock.style}>{#each clockStyles as s}<option value={s}>Style {s + 1}</option>{/each}</select>
+        </div>
+        <div class="field"><span>Colour</span><input type="color" bind:value={spec.clock.color} /></div>
       </div>
-      <div class="field"><span>Colour</span><input type="color" bind:value={spec.clock.color} /></div>
-    </div>
-    <div class="row2">
-      <div class="field"><span>X</span><input type="number" min="0" max="465" bind:value={spec.clock.x} /></div>
-      <div class="field"><span>Y</span><input type="number" min="0" max="465" bind:value={spec.clock.y} /></div>
-    </div>
-    <div class="row2 centres">
-      <button class="small" onclick={() => centre("clock", "x")}>Centre ↔</button>
-      <button class="small" onclick={() => centre("clock", "y")}>Centre ↕</button>
-    </div>
-    <p class="faint tiny">Or drag the clock on the preview.</p>
+      <div class="row2">
+        <div class="field"><span>X</span><input type="number" min="0" max="465" bind:value={spec.clock.x} /></div>
+        <div class="field"><span>Y</span><input type="number" min="0" max="465" bind:value={spec.clock.y} /></div>
+      </div>
+      <div class="row2 centres">
+        <button class="small" onclick={() => centre("clock", "x")}>Centre ↔</button>
+        <button class="small" onclick={() => centre("clock", "y")}>Centre ↕</button>
+      </div>
+      <p class="faint tiny">Or drag the clock on the preview.</p>
+    {:else}
+      <div class="field"><span>Layout</span>
+        <div class="seg">
+          {#each LAYOUTS as l}<button class:on={fontClock.template === l.id} title={l.description} onclick={() => (spec.nativeClock!.template = l.id)}>{l.name}</button>{/each}
+        </div>
+      </div>
+      <FontGallery font={fontClock.font} weight={fontClock.weight}
+        onchange={(f, w) => { spec.nativeClock!.font = f; spec.nativeClock!.weight = w; }} />
+      <div class="row2">
+        <div class="field"><span>Colour</span><input type="color" value={fontClock.digit_color ?? "#ffffff"}
+          oninput={(e) => (spec.nativeClock!.digit_color = (e.currentTarget as HTMLInputElement).value)} /></div>
+      </div>
+      <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.center_time} /> Centre the time</label>
+      <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_date} /> The layout's date</label>
+      <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_data} /> The layout's data widgets</label>
+      <p class="faint tiny">The layout places the clock; your design is everything behind it. Installs as a native face.</p>
+    {/if}
 
     <h3>Layers <span class="faint">(bottom → top)</span></h3>
     <ul class="layers">
@@ -314,12 +373,13 @@
       <button class:on={mode === "live"} onclick={() => (mode = "live")}>Live</button>
       <button class:on={mode === "exact"} onclick={() => (mode = "exact")} disabled={!preview}>Exact watch render</button>
     </div>
-    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} {clockSvg} {clockBox}
+    <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} clockSvg={fontClock ? overlaySvg : clockSvg}
+      clockBox={fontClock ? null : clockBox}
       clockAnchor={[spec.clock.x, spec.clock.y]} layers={spec.layers} selected={target}
       onselect={selectTarget} onmove={setAnchor} onboxes={(b) => (boxes = b)} />
     <p class="faint small center-text">
       Drag anything to move it (snaps to centre) · arrow keys nudge ·
-      {#if rendering}checking exact render…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB · {Math.round(preview.checks.lit_fraction * 100)}% lit{/if}
+      {#if rendering}checking exact render…{:else if preview}{(preview.bytes / 1024).toFixed(0)} KB{#if !fontClock} · {Math.round(preview.checks.lit_fraction * 100)}% lit{/if}{/if}
     </p>
     {#if preview?.checks.warnings.length}
       {#each preview.checks.warnings as w}<p class="warn small">▲ {w}</p>{/each}
@@ -334,11 +394,24 @@
       </select>
       <button onclick={() => { spec = blankFace(); selected = 0; notice = null; }}>New</button>
       <button onclick={save}>Save</button>
-      <button class="primary" onclick={() => (confirming = true)} disabled={installing || status?.link?.state === "needs_pair"}>
+      <button class="primary" onclick={() => (confirming = true)}
+        disabled={installing || status?.link?.state === "needs_pair" || (!!fontClock && (layoutOnWatch || watchFull))}>
         {installing ? "Installing…" : "Install on watch"}
       </button>
     </div>
-    {#if confirming}
+    {#if fontClock && layoutOnWatch}
+      <p class="warn small">A {layoutName} face is already on your watch, and the watch won't overwrite it: remove it on the watch first, or pick another layout.</p>
+    {:else if fontClock && watchFull}
+      <p class="warn small">The watch is full ({dials.dials.length} faces): remove one on the watch first.</p>
+    {/if}
+    {#if confirming && fontClock}
+      <div class="confirm card">
+        <p>This <strong>adds</strong> a new {layoutName} face to your watch ({dials.dials.length + 1} of {dials.max ?? 7}) and shows it now.
+          It won't update itself after syncs: to change it later, remove it on the watch and install again.</p>
+        <button class="primary" onclick={install}>Add to watch</button>
+        <button onclick={() => (confirming = false)}>Cancel</button>
+      </div>
+    {:else if confirming}
       <div class="confirm card">
         <p>This replaces your watch's <strong>only custom photo face</strong> and makes this face active.
           {#if spec.refresh === "on_sync"}It will then update itself after each health sync.{/if}</p>
@@ -491,6 +564,7 @@
   .seg button.on { background: var(--surface-2); border-color: var(--faint); }
   .centres { margin: 4px 0 10px; }
   .tiny { font-size: 11px; margin: 4px 0 12px; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 4px 0; }
   .file { display: grid; gap: 3px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
   .inline { display: flex; align-items: center; gap: 6px; }
   @media (max-width: 980px) {
