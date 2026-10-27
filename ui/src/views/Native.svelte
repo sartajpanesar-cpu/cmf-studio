@@ -336,7 +336,6 @@
   .bezel img { width: 100%; height: 100%; border-radius: 50%; display: block; }
   .empty { display: grid; place-items: center; height: 100%; }
   .install { width: min(100%, 420px); display: grid; gap: 8px; margin-top: 8px; }
-  .install select { width: 100%; margin-top: 4px; }
   .confirm { margin: 0; }
   .warn { color: var(--warn); margin: 0; }
   .good { color: var(--good); }
