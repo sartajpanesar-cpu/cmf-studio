@@ -174,3 +174,19 @@ Specs come from the CLI, the UI, Claude's design assistant and MCP, and are rend
   and each re-pair re-exposes `AT GETSECRET` to the radio.
 - **MCP approval UX:** the server isn't yet visible in the owner's Claude Code `/mcp` list. Approval prompts are part of
   the §3.5 defence, so verify they appear once it loads.
+
+## 6. Review 2026-10-27 (after Phase 5b)
+Checked the running system: watchd listens on 127.0.0.1:8765 only; 64 routes, all token-protected except FastAPI's
+docs; no token or pairing key in logs or the database; `npm audit` and `pip-audit` (≈250 packages) clean; every
+external command uses fixed arguments (no shell); the UI's one raw-HTML spot only shows server-built markup.
+Fixed:
+- **API could run any Shortcut**: the weather glance line's Shortcut is API-settable and watchd runs it → only
+  Shortcuts whose name starts with "Watch" (validated on save and before running).
+- **Research endpoints on by default** (`/settings/raw` raw settings bytes, install `as_id`) → off unless watchd
+  starts with `CMF_RESEARCH=1`.
+- **Unauthenticated /docs, /redoc, /openapi.json** → disabled.
+- **Health database / logs readable by other local accounts** (home is group-readable, files were 644) →
+  umask 077 and 700/600 on the app and log folders at startup.
+Still accepted: the watch's own protocol weaknesses (§3.2, §3.3); native faces are parsed by the watch's firmware, so
+every file we send is validated and pointer-checked first (§3.6); Google Fonts and Open-Meteo see font names and
+rounded coordinates.

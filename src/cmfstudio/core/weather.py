@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..store.db import Store
 
@@ -63,12 +63,28 @@ class Place(BaseModel):
     longitude: float = Field(ge=-180, le=180)
 
 
+SHORTCUT_PREFIX = "watch"  # only Shortcuts the owner named for the watch can be run from an API-set value
+
+
+def allowed_shortcut(name: str) -> bool:
+    return name.strip().lower().startswith(SHORTCUT_PREFIX)
+
+
 class WeatherSettings(BaseModel):
     enabled: bool = False
     place: Place | None = None
     glance: Literal["place", "text", "shortcut"] = "place"
     glance_text: str = Field("", max_length=60)
     glance_shortcut: str = Field("", max_length=100)
+
+    @field_validator("glance_shortcut")
+    @classmethod
+    def _watch_shortcuts_only(cls, v: str) -> str:
+        # The API can set this and watchd runs it, so it must not reach arbitrary Shortcuts (security review
+        # 2026-10-27): only ones whose name starts with "Watch", e.g. "Watch next event".
+        if v and not allowed_shortcut(v):
+            raise ValueError('the Shortcut\'s name must start with "Watch" (e.g. "Watch next event")')
+        return v
 
 
 @dataclass
@@ -230,7 +246,7 @@ class WeatherService:
     async def glance(self, s: WeatherSettings) -> str:
         if s.glance == "text" and s.glance_text:
             return s.glance_text
-        if s.glance == "shortcut" and s.glance_shortcut:
+        if s.glance == "shortcut" and s.glance_shortcut and allowed_shortcut(s.glance_shortcut):
             try:
                 return (await self.shortcut(s.glance_shortcut)) or (s.place.name if s.place else "")
             except Exception as exc:  # a broken Shortcut shouldn't stop the weather

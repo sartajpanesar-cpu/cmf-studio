@@ -84,7 +84,7 @@ async def weather_api(paired_link, watch, tmp_path):
 
     async def shortcut(name):
         shortcut_runs.append(name)
-        if name == "broken":
+        if name == "Watch broken":
             raise RuntimeError("nope")
         return "Dentist 3pm"
 
@@ -112,21 +112,23 @@ async def test_place_search_and_push_with_glance(weather_api):
     places = (await c.get("/weather/places", params={"q": "Paris"})).json()
     assert places == [{"name": "Paris, Ile-de-France, FR", "latitude": 48.86, "longitude": 2.35}]
 
-    settings = {"enabled": True, "place": places[0], "glance": "shortcut", "glance_shortcut": "Next event"}
+    settings = {"enabled": True, "place": places[0], "glance": "shortcut", "glance_shortcut": "Watch next event"}
     assert (await c.put("/weather/settings", json=settings)).status_code == 200
     r = (await c.post("/weather/push")).json()
-    assert r["glance"] == "Dentist 3pm" and runs == ["Next event"]
+    assert r["glance"] == "Dentist 3pm" and runs == ["Watch next event"]
     assert (await wait_job(c, r["job"]["id"]))["state"] == "done"
     assert watch.state.weather_city == "Dentist 3pm"
     forecast_call = next(u for u in calls if u.host == "api.open-meteo.com")
     assert forecast_call.params["latitude"] == "48.86" and forecast_call.params["longitude"] == "2.35"
 
     # a broken Shortcut falls back to the place name instead of failing the weather
-    await c.put("/weather/settings", json={**settings, "glance_shortcut": "broken"})
+    bad = await c.put("/weather/settings", json={**settings, "glance_shortcut": "Delete all files"})
+    assert bad.status_code == 422, "only Shortcuts named for the watch"
+    await c.put("/weather/settings", json={**settings, "glance_shortcut": "Watch broken"})
     r = (await c.post("/weather/push")).json()
     assert r["glance"] == "Paris"
     state = (await c.get("/weather")).json()
-    assert state["last"]["glance"] == "Paris" and state["settings"]["glance_shortcut"] == "broken"
+    assert state["last"]["glance"] == "Paris" and state["settings"]["glance_shortcut"] == "Watch broken"
 
 
 async def test_text_glance(weather_api):

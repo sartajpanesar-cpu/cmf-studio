@@ -13,6 +13,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -109,7 +110,9 @@ def create_app(
     settings: SettingsService | None = None,
     media: MediaService | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="cmf-studio watchd", version="0.1.0")
+    # no /docs, /redoc or /openapi.json: they were the only routes served without the token (security review)
+    app = FastAPI(title="cmf-studio watchd", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+    research = os.environ.get("CMF_RESEARCH") == "1"  # raw settings writes / explicit dial ids: off by default
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     def auth(request: Request) -> None:
@@ -404,6 +407,10 @@ def create_app(
             need_native().spec(face_id)
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such native face") from None
+        if as_id is not None and not research:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "as_id is a research option: start watchd with CMF_RESEARCH=1"
+            )
         return await native_call(need_native().install(face_id, replace, as_id))
 
     @app.get("/watch/dials", dependencies=[Depends(auth)])
@@ -538,6 +545,8 @@ def create_app(
     async def post_settings_raw(body: RawSetting) -> dict[str, Any]:
         """Research: write raw bytes to one settings group (SET 0001, Tier 1), then read it back. Settings groups
         only; never exposed over MCP. Used to learn write formats (research/findings.md)."""
+        if not research:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "research endpoint: start watchd with CMF_RESEARCH=1")
         if body.name not in settings_mod.GROUPS:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"settings groups only: {sorted(settings_mod.GROUPS)}")
         cmd1 = settings_mod.GROUPS[body.name]

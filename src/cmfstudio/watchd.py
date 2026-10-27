@@ -11,6 +11,7 @@ import asyncio
 import faulthandler
 import json
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -63,6 +64,18 @@ async def find_address() -> str:
             return address
         log.warning("scan found %d CMF watches; need exactly one (or pass --address). retrying", len(found))
         await asyncio.sleep(30)
+
+
+def private_files() -> None:
+    """Health data, faces and logs readable by this user only (the home folder lets the staff group in, and the
+    database was 644: security review 2026-10-27)."""
+    os.umask(0o077)
+    for root in (APP_DIR, Path.home() / "Library" / "Logs" / "cmf-studio"):
+        if not root.exists():
+            continue
+        root.chmod(0o700)
+        for path in root.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
 
 
 async def serve(args: argparse.Namespace) -> None:
@@ -164,6 +177,7 @@ def main(argv: list[str] | None = None) -> None:
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     if args.verbose < 2:
         logging.getLogger("bleak").setLevel(logging.INFO)  # per-advertisement chatter only with -vv
+    private_files()
     asyncio.run(serve(args))
 
 
