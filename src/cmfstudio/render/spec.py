@@ -147,6 +147,7 @@ class NativeClock(BaseModel):
     show_date: bool = False
     show_data: bool = False
     center_time: bool = True
+    tidy: bool = True
 
 
 class FaceSpec(BaseModel):

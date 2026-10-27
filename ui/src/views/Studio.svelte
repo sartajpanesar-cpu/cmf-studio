@@ -3,7 +3,7 @@
   import FontGallery from "../lib/FontGallery.svelte";
   import LivePreview from "../lib/LivePreview.svelte";
   import {
-    BINDINGS, GOOGLE_FONTS, LAYOUTS, RING_METRICS, SIZE, blankFace, layerTitle, newLayer, newNativeClock,
+    BINDINGS, GOOGLE_FONTS, LAYOUTS, RING_METRICS, SIZE, blankFace, layerTitle, liveLayers, newLayer, newNativeClock,
     type FaceSpec, type Layer,
   } from "../lib/face";
 
@@ -344,7 +344,14 @@
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.center_time} /> Centre the time</label>
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_date} /> The layout's date</label>
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_data} /> The layout's data widgets</label>
+      {#if fontClock.show_date || fontClock.show_data}
+        <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.tidy} /> Tidy them (centred, in a row, labelled)</label>
+      {/if}
       <p class="faint tiny">The layout places the clock; your design is everything behind it. Installs as a native face.</p>
+      {#if liveLayers(spec).length}
+        <p class="warn tiny">Fixed once installed: {liveLayers(spec).join(", ")} — a native face's background is a picture, so these won't update.
+          For live values use the layout's date and data above.</p>
+      {/if}
     {/if}
 
     <h3>Layers <span class="faint">(bottom → top)</span></h3>

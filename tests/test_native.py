@@ -308,3 +308,25 @@ async def test_design_with_font_clock_previews_and_installs_as_native(studio_api
     again = await c.post(f"/faces/{face_id}/install", params={"confirm": True})
     assert again.status_code == 409, "the watch won't overwrite the layout"
     assert await faces.refresh_after_sync() is None, "no auto-refresh for native faces"
+
+
+@needs_templates
+def test_tidy_lines_up_ring_data_widgets_and_returns_labels():
+    from cmfstudio.render.native_face import DATA_ROW_Y, _scan, _tidy
+
+    dial = NativeDial(template(359))
+    labels = _tidy(dial, show_date=True, show_data=True)
+    assert [t for t, _x, _y in labels] == ["KCAL", "KM", "BPM"]
+    main = next(s for s in _scan(dial) if not s["aod"])
+    rows = {dial.position(g["frame"])[1] for g in main["groups"]}
+    assert rows == {DATA_ROW_Y}, "all data groups on one row"
+    xs = sorted(x for _t, x, _y in labels)
+    assert abs((xs[0] + xs[-1]) / 2 - 233) <= 2, "row centred"
+    out = NativeDial(dial.build())
+    icon = next(c for g in _scan(out)[0]["groups"] for c in g["children"] if c["tag"] == 0x30 and len(c["frames"]) == 1)
+    assert out.decode(icon["frames"][0])[..., 3].max() == 0, "placeholder dashes blanked"
+    # date row (month / day) centred too
+    dates = [n for n in main["nodes"] if n["tag"] == 0x60 and n["src"] in (0x16, 0x17)]
+    left = min(dial.position(n["st"])[0] for n in dates)
+    right = max(dial.position(n["st"])[0] + 2 * n["w"] for n in dates)
+    assert abs((left + right) / 2 - 233) <= 2

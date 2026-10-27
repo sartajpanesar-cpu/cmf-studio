@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import struct
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -65,6 +66,7 @@ class NativeSpec(BaseModel):
     show_date: bool = Field(True, description="the template's date / weekday widgets")
     show_data: bool = Field(False, description="steps, calories, heart rate, battery… (template placeholders)")
     center_time: bool = Field(True, description="shift the hours:minutes row to the middle of the screen")
+    tidy: bool = Field(True, description="centre the date, line the data widgets up with labels")
 
 
 @dataclass
@@ -106,9 +108,11 @@ async def build(
         data = add_background(data)  # Steady / Type draw black behind the time: give them a background image
     dial = NativeDial(data)
     warnings: list[str] = []
-    await _apply_clock(dial, spec)
+    labels = await _apply_clock(dial, spec)
 
     if bg_rgba is not None:
+        if labels:  # labels never change, so they live in the background picture
+            bg_rgba = await _paint_labels(bg_rgba, labels, spec)
         for bg in dial.backgrounds():
             dial.replace(bg, bg_rgba)
 
@@ -124,8 +128,10 @@ async def clock_overlay(spec: NativeSpec, values: dict[int, int] | None = None) 
     """Just the firmware-drawn widgets (time, and date / data if shown) on a transparent canvas — for laying the
     native clock over a live design preview."""
     dial = NativeDial(template_path(spec.template).read_bytes())
-    await _apply_clock(dial, spec)
+    labels = await _apply_clock(dial, spec)
     img = native_preview.render(dial, values or native_preview.sample_values(), transparent=True)
+    if labels:
+        img = Image.fromarray(await _paint_labels(np.asarray(img).copy(), labels, spec), "RGBA")
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
@@ -143,6 +149,7 @@ def spec_from_clock(clock, name: str, background_face_id: int | None = None) -> 
         show_date=clock.show_date,
         show_data=clock.show_data,
         center_time=clock.center_time,
+        tidy=getattr(clock, "tidy", True),
     )
 
 
@@ -158,8 +165,9 @@ async def _glyphs(font: FontRef, weight: int) -> list[np.ndarray]:
     return _GLYPHS[key]
 
 
-async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> None:
-    """Font, colour, accent, centring and hidden widgets — everything but the background."""
+async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> list[tuple[str, int, int]]:
+    """Font, colour, accent, centring, hidden and tidied widgets — everything but the background. Returns the labels
+    to paint under the data widgets."""
     glyphs = await _glyphs(spec.font, spec.weight) if spec.font else None
 
     for table, frames in dial.digit_sets():
@@ -188,6 +196,54 @@ async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> None:
     hidden |= {"data"} if not spec.show_data else set()
     if hidden:
         _hide(dial, hidden)
+    if spec.tidy and (spec.show_date or spec.show_data):
+        return _tidy(dial, spec.show_date, spec.show_data)
+    return []
+
+
+LABEL_PX = 13  # cap height of the labels under the data widgets
+
+
+async def _paint_labels(rgba: np.ndarray, labels: list[tuple[str, int, int]], spec: NativeSpec) -> np.ndarray:
+    """Draw each label (in the clock's font, digit colour at 75%) centred at (x, y) onto ``rgba``."""
+    glyphs = await _texts(spec.font, spec.weight, sorted({t for t, _x, _y in labels}))
+    tint = np.array(_rgb(spec.digit_color) if spec.digit_color else (200, 200, 200), np.float32)
+    out = rgba.astype(np.float32)
+    for text, cx, y in labels:
+        a = glyphs[text]
+        scale = LABEL_PX / max(1, a.shape[0])
+        img = Image.fromarray(a).resize((max(1, round(a.shape[1] * scale)), LABEL_PX), Image.Resampling.LANCZOS)
+        alpha = np.asarray(img).astype(np.float32) / 255 * 0.75
+        h, w = alpha.shape
+        x0 = cx - w // 2
+        if x0 < 0 or y < 0 or x0 + w > SIZE or y + h > SIZE:
+            continue
+        region = out[y : y + h, x0 : x0 + w]
+        region[..., :3] = tint * alpha[..., None] + region[..., :3] * (1 - alpha[..., None])
+        region[..., 3] = np.maximum(region[..., 3], alpha * 255)
+    return out.round().astype(np.uint8)
+
+
+async def _texts(font: FontRef | None, weight: int, texts: list[str]) -> dict[str, np.ndarray]:
+    """Each text drawn in ``font`` (or the system UI font), white alpha cropped to ink."""
+    family = f"'{font.family}'," if font else ""
+    spec = FaceSpec(name="labels", fonts=[font] if font else [])
+    links, faces = html._font_css(spec, None)
+    cells = "".join(f'<div class="c" style="top:{i * 120}px">{t}</div>' for i, t in enumerate(texts))
+    page = (
+        f"<!doctype html><html><head>{links}<style>{faces}html,body{{margin:0;background:transparent}}"
+        f".c{{position:absolute;left:0;height:120px;width:900px;display:flex;align-items:center;padding-left:20px;"
+        f"font:{weight} 80px {family}sans-serif;color:#fff;letter-spacing:4px}}</style></head>"
+        f"<body>{cells}</body></html>"
+    )
+    png = await raster.render_png(page, size=(900, 120 * len(texts)), transparent=True)
+    alpha = np.asarray(Image.open(io.BytesIO(png)).convert("RGBA"))[..., 3]
+    out = {}
+    for i, t in enumerate(texts):
+        cell = alpha[i * 120 : (i + 1) * 120]
+        box = _ink_box(cell, 8) or (0, 0, 1, 1)
+        out[t] = cell[box[1] : box[3], box[0] : box[2]]
+    return out
 
 
 # -- glyphs ---------------------------------------------------------------------------------------------------------
@@ -387,6 +443,126 @@ def _center_row(dial: NativeDial, found: list[dict], width: int) -> None:
     shift = round((width - (right - left)) / 2 - left)
     if shift:
         for st, x, y, _w in row:
+            dial.move(st, x + shift, y)
+
+
+# -- tidying the layout's date and data widgets --------------------------------------------------------------------
+
+LABELS = {0x60: "KCAL", 0x1C: "KCAL", 0x1E: "KCAL", 0x48: "KCAL", 0x61: "KM", 0x22: "KM", 0x1A: "BPM", 0x19: "STEPS"}
+DATA_ROW_Y = 318  # top of the tidied data row (below the time and date on every layout)
+
+
+def _scan(dial: NativeDial) -> list[dict]:
+    """Per screen: its top-level 0x30/0x60 nodes and its 0x68 groups (frame offset, children)."""
+    b = dial.b
+    tails = {t.at: t for t in dial.tails}
+
+    def tlv(off: int, end: int):
+        while off < end:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            yield tag, off + 3, ln
+            off += 3 + ln
+
+    def node(tag: int, body: int, n: int) -> dict | None:
+        st, conds = None, False
+        for t2, cb, _l2 in tlv(body, body + n):
+            if t2 == 0x01:
+                st = cb
+            elif t2 == 0x02:
+                conds = True
+        tail = tails.get(st + 0x12) if st is not None else None
+        if tail is None:
+            return None
+        frames = dial.chain(tail)
+        return {
+            "tag": tag,
+            "st": st,
+            "src": b[st + 13],
+            "conds": conds,
+            "frames": frames,
+            "w": max(f.w for f in frames),
+            "h": frames[0].h,
+        }
+
+    screens = []
+    for tag, body, n in tlv(36, dial.first_asset):
+        if tag != 0x20:
+            continue
+        for stag, sbody, sn in tlv(body, body + n):
+            if stag not in (0x21, 0x22):
+                continue
+            screen = {"aod": stag == 0x22, "nodes": [], "groups": []}
+            for ctag, cbody, cn in tlv(sbody, sbody + sn):
+                if ctag in (0x30, 0x60) and (nd := node(ctag, cbody, cn)):
+                    screen["nodes"].append(nd)
+                elif ctag == 0x68:
+                    group = {"frame": None, "children": []}
+                    for gtag, gbody, gn in tlv(cbody, cbody + cn):
+                        if gtag == 0x48:
+                            group["frame"] = gbody
+                        elif gtag in (0x30, 0x60) and (nd := node(gtag, gbody, gn)):
+                            group["children"].append(nd)
+                    if group["frame"] is not None:
+                        screen["groups"].append(group)
+            screens.append(screen)
+    return screens
+
+
+def _tidy(dial: NativeDial, show_date: bool, show_data: bool) -> list[tuple[str, int, int]]:
+    """Centre the date row and weekday; lay the data widgets out in one even row with their placeholder icons
+    blanked. Returns (label, centre x, y) for labels to paint under the data widgets."""
+    labels: list[tuple[str, int, int]] = []
+    for screen in _scan(dial):
+        nodes = screen["nodes"]
+        if show_date:
+            dates = [n for n in nodes if n["tag"] == 0x60 and n["src"] in DATE_IDS]
+            if dates:
+                _, row_y = dial.position(dates[0]["st"])
+                row = [
+                    n
+                    for n in nodes
+                    if abs(dial.position(n["st"])[1] - row_y) <= 12
+                    and ((n["tag"] == 0x60 and n["src"] in DATE_IDS) or (n["src"] == 0 and not n["conds"]))
+                ]
+                _centre_nodes(dial, row)
+            for n in nodes:  # weekday / month pictures: one image each
+                if n["tag"] == 0x30 and n["src"] in DATE_IDS:
+                    _centre_nodes(dial, [n])
+        if not show_data or screen["aod"]:
+            continue
+        data = [g for g in screen["groups"] if any(c["src"] not in (0, *TIME_IDS, *DATE_IDS) for c in g["children"])]
+        if not data:
+            continue
+        b = dial.b
+        widths = [struct.unpack_from("<H", b, g["frame"] + 4)[0] for g in data]
+        gap = 28
+        x = (SIZE - (sum(widths) + gap * (len(data) - 1))) // 2
+        for g, w in zip(data, widths, strict=True):
+            fh = struct.unpack_from("<H", b, g["frame"] + 6)[0]
+            dial.move(g["frame"], x, DATA_ROW_Y)
+            source = next((c["src"] for c in g["children"] if c["tag"] == 0x60), 0)
+            labels.append((LABELS.get(source, ""), x + w // 2, DATA_ROW_Y + fh + 4))
+            for c in g["children"]:  # the "–" placeholder icons (the store face's art was removed)
+                if c["tag"] == 0x30 and len(c["frames"]) == 1:
+                    a = c["frames"][0]
+                    dial.replace(a, np.zeros((a.h, a.w, 4), dtype=np.uint8))
+            x += w + gap
+    return [lbl for lbl in labels if lbl[0]]
+
+
+def _centre_nodes(dial: NativeDial, row: list[dict]) -> None:
+    if not row:
+        return
+    spans = []
+    for n in row:
+        x, y = dial.position(n["st"])
+        count = 2 if n["tag"] == 0x60 else 1
+        spans.append((n["st"], x, y, n["w"] * count))
+    left = min(x for _st, x, _y, _w in spans)
+    right = max(x + w for _st, x, _y, w in spans)
+    shift = round((SIZE - (right - left)) / 2 - left)
+    for st, x, y, _w in spans:
+        if shift:
             dial.move(st, x + shift, y)
 
 
