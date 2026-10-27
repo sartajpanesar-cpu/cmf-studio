@@ -332,3 +332,21 @@ def test_tidy_lines_up_ring_data_widgets_and_returns_labels():
     left = min(dial.position(n["st"])[0] for n in dates)
     right = max(dial.position(n["st"])[0] + 2 * n["w"] for n in dates)
     assert abs((left + right) / 2 - 233) <= 2
+
+
+@needs_templates
+def test_offset_moves_every_widget_but_not_the_background():
+    from cmfstudio.render.native_face import _scan
+
+    plain = NativeDial(asyncio.run(build(NativeSpec(template=359, show_date=True, show_data=True))).blob)
+    moved = NativeDial(
+        asyncio.run(build(NativeSpec(template=359, show_date=True, show_data=True, offset_x=-30, offset_y=25))).blob
+    )
+    for a, b in zip(_scan(plain), _scan(moved), strict=True):
+        bgs = {x.off for x in plain.backgrounds(a["aod"])}
+        for na, nb in zip(a["nodes"], b["nodes"], strict=True):
+            (xa, ya), (xb, yb) = plain.position(na["st"]), moved.position(nb["st"])
+            assert (xb - xa, yb - ya) == ((0, 0) if na["frames"][0].off in bgs else (-30, 25))
+        for ga, gb in zip(a["groups"], b["groups"], strict=True):
+            (xa, ya), (xb, yb) = plain.position(ga["frame"]), moved.position(gb["frame"])
+            assert (xb - xa, yb - ya) == (-30, 25)

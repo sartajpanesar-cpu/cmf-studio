@@ -44,7 +44,11 @@
   function loadDraft(): FaceSpec {
     try {
       const raw = localStorage.getItem("cmf-studio-draft");
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft.nativeClock) draft.nativeClock = { ...newNativeClock(), ...draft.nativeClock }; // older drafts lack newer fields
+        return draft;
+      }
     } catch { /* fall through */ }
     return blankFace();
   }
@@ -69,6 +73,8 @@
   let mode = $state<"live" | "exact">("live");
   // "Your font" clock: the watch-drawn widgets as a transparent overlay on the live design preview
   let overlayPng = $state<string | null>(null);
+  let overlayBox = $state<[number, number, number, number] | null>(null);
+  let overlayOffset = $state<[number, number]>([0, 0]); // the offset baked into overlayPng
   let overlaySeq = 0;
   let overlayTimer: ReturnType<typeof setTimeout> | undefined;
   let dials = $state<{ known: boolean; max?: number; dials: { id: number; name: string; kind: string }[] }>({ known: false, dials: [] });
@@ -85,13 +91,28 @@
       const mine = ++overlaySeq;
       try {
         const r = await post("/faces/native-clock", { ...withFonts(spec), nativeClock: JSON.parse(clock) });
-        if (mine === overlaySeq) overlayPng = `data:image/png;base64,${r.overlay_png}`;
+        if (mine === overlaySeq) {
+          overlayPng = `data:image/png;base64,${r.overlay_png}`;
+          overlayBox = r.box;
+          overlayOffset = r.offset;
+        }
       } catch (e: any) {
         if (mine === overlaySeq) error = e.message;
       }
     }, 300);
   });
-  const overlaySvg = $derived(overlayPng ? `<img src="${overlayPng}" width="466" height="466" alt="" style="display:block">` : "");
+  // while a move waits for the exact re-render, slide the last overlay (and its box) by the difference
+  const pending = $derived<[number, number]>(
+    fontClock ? [fontClock.offset_x - overlayOffset[0], fontClock.offset_y - overlayOffset[1]] : [0, 0],
+  );
+  const fontBox = $derived<[number, number, number, number] | null>(
+    overlayBox ? [overlayBox[0] + pending[0], overlayBox[1] + pending[1], overlayBox[2] + pending[0], overlayBox[3] + pending[1]] : null,
+  );
+  const overlaySvg = $derived(
+    overlayPng
+      ? `<img src="${overlayPng}" width="466" height="466" alt="" style="display:block;transform:translate(${pending[0]}px,${pending[1]}px)">`
+      : "",
+  );
   $effect(() => {
     const snapshot = JSON.stringify(spec); // tracks every nested change
     try { localStorage.setItem("cmf-studio-draft", snapshot); } catch { /* draft is a convenience */ }
@@ -141,7 +162,9 @@
 
   async function open(id: number) {
     try {
-      spec = (await get(`/faces/${id}`)).spec;
+      const opened = (await get(`/faces/${id}`)).spec;
+      if (opened.nativeClock) opened.nativeClock = { ...newNativeClock(), ...opened.nativeClock };
+      spec = opened;
       selected = spec.layers.length ? 0 : null;
       notice = `Opened “${spec.name}”.`;
     } catch (e: any) {
@@ -206,6 +229,11 @@
   }
 
   function setAnchor(t: number | "clock", x: number, y: number) {
+    if (t === "clock" && spec.nativeClock) {  // your-font clock: an offset for the whole clock block
+      spec.nativeClock.offset_x = Math.max(-200, Math.min(200, x));
+      spec.nativeClock.offset_y = Math.max(-200, Math.min(200, y));
+      return;
+    }
     if (t === "clock") {
       spec.clock.x = Math.max(0, Math.min(SIZE - 1, x));
       spec.clock.y = Math.max(0, Math.min(SIZE - 1, y));
@@ -216,13 +244,14 @@
   }
 
   function anchorOf(t: number | "clock"): [number, number] {
+    if (t === "clock" && spec.nativeClock) return [spec.nativeClock.offset_x, spec.nativeClock.offset_y];
     if (t === "clock") return [spec.clock.x, spec.clock.y];
     const l = spec.layers[t];
     return l.type === "circle" || l.type === "ring" ? [l.cx, l.cy] : [l.x, l.y];
   }
 
   function boxOf(t: number | "clock"): [number, number, number, number] | null {
-    if (t === "clock") return clockBox;
+    if (t === "clock") return fontClock ? fontBox : clockBox;
     const l = spec.layers[t];
     if (l.type === "circle" || l.type === "ring") return [l.cx - l.r, l.cy - l.r, l.cx + l.r, l.cy + l.r];
     if (l.type === "rect" || l.type === "image") return [l.x, l.y, l.x + l.w, l.y + l.h];
@@ -342,6 +371,15 @@
           oninput={(e) => (spec.nativeClock!.digit_color = (e.currentTarget as HTMLInputElement).value)} /></div>
       </div>
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.center_time} /> Centre the time</label>
+      <div class="row2">
+        <div class="field"><span>Move ↔</span><input type="number" min="-200" max="200" bind:value={spec.nativeClock!.offset_x} /></div>
+        <div class="field"><span>Move ↕</span><input type="number" min="-200" max="200" bind:value={spec.nativeClock!.offset_y} /></div>
+      </div>
+      <div class="row2 centres">
+        <button class="small" onclick={() => centre("clock", "x")}>Centre ↔</button>
+        <button class="small" onclick={() => centre("clock", "y")}>Centre ↕</button>
+      </div>
+      <p class="faint tiny">Or drag the clock on the preview (time, date and data move together).</p>
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_date} /> The layout's date</label>
       <label class="check"><input type="checkbox" bind:checked={spec.nativeClock!.show_data} /> The layout's data widgets</label>
       {#if fontClock.show_date || fontClock.show_data}
@@ -381,8 +419,9 @@
       <button class:on={mode === "exact"} onclick={() => (mode = "exact")} disabled={!preview}>Exact watch render</button>
     </div>
     <LivePreview html={liveHtml} exactPng={preview?.png ?? null} {mode} clockSvg={fontClock ? overlaySvg : clockSvg}
-      clockBox={fontClock ? null : clockBox}
-      clockAnchor={[spec.clock.x, spec.clock.y]} layers={spec.layers} selected={target}
+      clockBox={fontClock ? fontBox : clockBox}
+      clockAnchor={fontClock ? [fontClock.offset_x, fontClock.offset_y] : [spec.clock.x, spec.clock.y]}
+      layers={spec.layers} selected={target}
       onselect={selectTarget} onmove={setAnchor} onboxes={(b) => (boxes = b)} />
     <p class="faint small center-text">
       Drag anything to move it (snaps to centre) · arrow keys nudge ·

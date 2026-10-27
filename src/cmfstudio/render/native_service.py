@@ -144,7 +144,13 @@ class NativeService:
         ctx = self.photo_faces.context() if self.photo_faces else None
         m = ctx.metrics if ctx else {}
         return native_preview.sample_values(
-            metrics={"steps": m.get("steps"), "kcal": m.get("kcal"), "hr": m.get("hr"), "battery": self.link.battery}
+            metrics={
+                "steps": m.get("steps"),
+                "kcal": m.get("kcal"),
+                "hr": m.get("hr"),
+                "hr_resting": m.get("hr_resting"),
+                "battery": self.link.battery,
+            }
         )
 
     async def build(self, spec: NativeSpec) -> NativeResult:
@@ -243,8 +249,13 @@ class NativeService:
         clock = design.native_clock
         spec = native_face.spec_from_clock(clock, design.name)
         if overlay_only:
-            png = await native_face.clock_overlay(spec, self.values())
-            return {"overlay_png": base64.b64encode(png).decode(), "template": clock.template}
+            png, box = await native_face.clock_overlay(spec, self.values())
+            return {
+                "overlay_png": base64.b64encode(png).decode(),
+                "box": box,
+                "offset": [spec.offset_x, spec.offset_y],
+                "template": clock.template,
+            }
         if self.photo_faces is None:
             raise LookupError("photo faces aren't available")
         background = (await self.photo_faces.preview(design.model_copy(update={"native_clock": None}))).watch

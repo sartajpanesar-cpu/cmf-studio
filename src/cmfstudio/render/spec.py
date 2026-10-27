@@ -148,6 +148,8 @@ class NativeClock(BaseModel):
     show_data: bool = False
     center_time: bool = True
     tidy: bool = True
+    offset_x: int = Field(0, ge=-200, le=200)
+    offset_y: int = Field(0, ge=-200, le=200)
 
 
 class FaceSpec(BaseModel):

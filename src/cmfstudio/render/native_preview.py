@@ -27,13 +27,28 @@ def sample_values(now: dt.datetime | None = None, metrics: dict[str, Any] | None
     m = metrics or {}
     h12 = now.hour % 12 or 12
     v = {
-        0x01: now.hour, 0x04: now.hour, 0x07: now.hour, 0x02: h12 // 10, 0x03: h12 % 10,
-        0x05: now.hour // 10, 0x06: now.hour % 10, 0x08: now.hour // 10, 0x09: now.hour % 10,
-        0x0B: now.minute, 0x0C: now.minute // 10, 0x0D: now.minute % 10,
-        0x0F: now.second, 0x10: now.second // 10, 0x11: now.second % 10,
-        0x13: int(now.hour >= 12), 0x15: now.month, 0x16: now.month, 0x17: now.day, 0x18: now.weekday(),
+        0x01: now.hour,
+        0x04: now.hour,
+        0x07: now.hour,
+        0x02: h12 // 10,
+        0x03: h12 % 10,
+        0x05: now.hour // 10,
+        0x06: now.hour % 10,
+        0x08: now.hour // 10,
+        0x09: now.hour % 10,
+        0x0B: now.minute,
+        0x0C: now.minute // 10,
+        0x0D: now.minute % 10,
+        0x0F: now.second,
+        0x10: now.second // 10,
+        0x11: now.second % 10,
+        0x13: int(now.hour >= 12),
+        0x15: now.month,
+        0x16: now.month,
+        0x17: now.day,
+        0x18: now.weekday(),
         0x73: 0,
-    }  # fmt: skip
+    }
     steps, kcal, hr, battery = m.get("steps"), m.get("kcal"), m.get("hr"), m.get("battery")
     # 0x60 = calories per the spec author's editor (wfweb mock.ts) — the spec marks these ids contested
     for ids, value in (

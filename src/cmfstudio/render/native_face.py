@@ -66,6 +66,8 @@ class NativeSpec(BaseModel):
     show_data: bool = Field(False, description="steps, calories, heart rate, battery… (template placeholders)")
     center_time: bool = Field(True, description="shift the hours:minutes row to the middle of the screen")
     tidy: bool = Field(True, description="centre the date, line the data widgets up with labels")
+    offset_x: int = Field(0, ge=-200, le=200, description="move the whole clock (time, date, data) right")
+    offset_y: int = Field(0, ge=-200, le=200, description="…and down")
 
 
 @dataclass
@@ -123,17 +125,18 @@ async def build(
     return NativeResult(blob, preview_png, warnings, spec.template)
 
 
-async def clock_overlay(spec: NativeSpec, values: dict[int, int] | None = None) -> bytes:
+async def clock_overlay(spec: NativeSpec, values: dict[int, int] | None = None) -> tuple[bytes, list[int] | None]:
     """Just the firmware-drawn widgets (time, and date / data if shown) on a transparent canvas — for laying the
-    native clock over a live design preview."""
+    native clock over a live design preview — and their bounding box [x0, y0, x1, y1] (None if empty)."""
     dial = NativeDial(template_path(spec.template).read_bytes())
     labels = await _apply_clock(dial, spec)
     img = native_preview.render(dial, values or native_preview.sample_values(), transparent=True)
     if labels:
         img = Image.fromarray(await _paint_labels(np.asarray(img).copy(), labels, spec), "RGBA")
+    box = _ink_box(np.asarray(img)[..., 3], 40)
     buf = io.BytesIO()
     img.save(buf, "PNG")
-    return buf.getvalue()
+    return buf.getvalue(), list(box) if box else None
 
 
 def spec_from_clock(clock, name: str, background_face_id: int | None = None) -> NativeSpec:  # type: ignore[no-untyped-def]
@@ -149,6 +152,8 @@ def spec_from_clock(clock, name: str, background_face_id: int | None = None) -> 
         show_data=clock.show_data,
         center_time=clock.center_time,
         tidy=getattr(clock, "tidy", True),
+        offset_x=getattr(clock, "offset_x", 0),
+        offset_y=getattr(clock, "offset_y", 0),
     )
 
 
@@ -195,9 +200,25 @@ async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> list[tuple[str, in
     hidden |= {"data"} if not spec.show_data else set()
     if hidden:
         _hide(dial, hidden)
-    if spec.tidy and (spec.show_date or spec.show_data):
-        return _tidy(dial, spec.show_date, spec.show_data)
-    return []
+    labels = _tidy(dial, spec.show_date, spec.show_data) if spec.tidy and (spec.show_date or spec.show_data) else []
+    if spec.offset_x or spec.offset_y:
+        _offset(dial, spec.offset_x, spec.offset_y)
+        labels = [(t, x + spec.offset_x, y + spec.offset_y) for t, x, y in labels]
+    return labels
+
+
+def _offset(dial: NativeDial, dx: int, dy: int) -> None:
+    """Move every widget on both screens (not the background) by (dx, dy): top-level nodes and group frames."""
+    for screen in _scan(dial):
+        backgrounds = {a.off for a in dial.backgrounds(screen["aod"])}
+        for n in screen["nodes"]:
+            if n["frames"][0].off in backgrounds:
+                continue
+            x, y = dial.position(n["st"])
+            dial.move(n["st"], x + dx, y + dy)
+        for g in screen["groups"]:
+            x, y = dial.position(g["frame"])
+            dial.move(g["frame"], x + dx, y + dy)
 
 
 LABEL_PX = 13  # cap height of the labels under the data widgets
