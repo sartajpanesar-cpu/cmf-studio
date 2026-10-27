@@ -244,3 +244,16 @@ def test_add_background_to_layouts_without_one(n):
     assert np.abs(bg[233, 233, :3].astype(int) - (200, 40, 40)).max() <= 12
     img = np.asarray(native_preview.render(final, native_preview.sample_values()))
     assert np.abs(img[233, 6, :3].astype(int) - (200, 40, 40)).max() <= 12, "preview draws the new background"
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [288, 362])
+def test_chosen_colour_beats_the_watch_accent_tint(n):
+    """Type's time showed in the watch's accent red despite gold pixels: tintable widgets must lose the flag."""
+    before = NativeDial(template(n))
+    assert any(before.b[t.at - 0x12 + 11] == 4 for t in before.tails if not t.aod)
+    out = NativeDial(asyncio.run(build(NativeSpec(template=n, digit_color="#e8c66a"))).blob)
+    flagged = [t for t in out.tails if not t.aod and out.b[t.at - 0x15] == 0x01 and out.b[t.at - 0x12 + 11] == 4]
+    assert flagged == []
+    kept = NativeDial(asyncio.run(build(NativeSpec(template=n))).blob)  # template colour: the watch's accent stays
+    assert any(kept.b[t.at - 0x12 + 11] == 4 for t in kept.tails if not t.aod)

@@ -120,6 +120,12 @@ async def build(
             rgba[..., :3] = tint  # one colour everywhere: straight alpha, and it compresses far better
             rgba[..., 3] = alpha
             dial.replace(frame, rgba)
+        if colour:  # our colour must win over the watch's accent tint (Type's time showed red, 2026-10-26)
+            for body in dial.struct_bodies({f.off for f in frames}):
+                dial.clear_accent(body)
+
+    if spec.digit_color:
+        _accent_to_colour(dial, _rgb(spec.digit_color))
 
     if spec.center_time:
         _center_time(dial)
@@ -191,6 +197,22 @@ def fit_digits(glyphs: list[np.ndarray], originals: list[np.ndarray]) -> list[np
         _paste(canvas, small, int(round((b[0] + b[2]) / 2 - gw / 2)), bottom - gh)
         out.append(canvas)
     return out
+
+
+def _accent_to_colour(dial: NativeDial, tint: tuple[int, int, int]) -> None:
+    """Every main-screen widget the firmware would tint with its accent colour (meta[7] == 4, spec §11.14) gets the
+    chosen digit colour baked in instead (alpha kept), and the flag cleared — so colons, weekday and month images
+    match the digits instead of showing the watch's accent (red on the owner's watch)."""
+    for t in dial.tails:
+        body = t.at - 0x12
+        if t.aod or dial.b[body - 3] != 0x01 or dial.b[body + 11] != 4:
+            continue
+        for a in dial.chain(t):
+            if a.cf in (5, 13, 24):
+                rgba = dial.decode(a).copy()
+                rgba[..., :3] = tint
+                dial.replace(a, rgba)
+        dial.clear_accent(body)
 
 
 # -- which template widgets show ----------------------------------------------------------------------------------

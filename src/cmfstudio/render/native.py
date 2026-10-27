@@ -90,6 +90,7 @@ class NativeDial:
             raise NativeFormatError("; ".join(problems))
         self._new: dict[int, bytes] = {}  # asset offset -> new LZ4 block
         self._moves: dict[int, tuple[int, int]] = {}  # 0x01 struct body offset -> new (x, y)
+        self._bytes: dict[int, int] = {}  # absolute scene offset -> new byte value
 
     # -- structure ---------------------------------------------------------------------------------------------
 
@@ -197,6 +198,24 @@ class NativeDial:
             raise NativeFormatError(f"position {x},{y} is off the canvas")
         self._moves[struct_body] = (x, y)
 
+    def struct_bodies(self, assets: set[int]) -> list[int]:
+        """0x01 structs whose ref tail points at any of ``assets`` (asset offsets)."""
+        out = []
+        for t in self.tails:
+            body = t.at - 0x12
+            if self.b[body - 3] == 0x01 and any(a.off in assets for a in self.chain(t)):
+                out.append(body)
+        return out
+
+    def clear_accent(self, struct_body: int) -> bool:
+        """Turn off the firmware accent tint (meta[7] == 4, spec §11.14) so the baked pixel colour shows.
+        Returns whether it was set."""
+        flag = struct_body + 4 + 7
+        if self.b[flag] != 4:
+            return False
+        self._bytes[flag] = 0
+        return True
+
     def position(self, struct_body: int) -> tuple[int, int]:
         return self._moves.get(struct_body) or struct.unpack_from("<hh", self.b, struct_body)
 
@@ -223,6 +242,8 @@ class NativeDial:
         out = bytearray(b[:old_first]) + pool + bytes(HEADER)
         for body, (x, y) in self._moves.items():
             struct.pack_into("<hh", out, body, x, y)
+        for off, value in self._bytes.items():
+            out[off] = value
         for t in self.tails:
             frames = self.chain(t)
             struct.pack_into("<I", out, t.at + 3, moved[frames[0].off][0])
