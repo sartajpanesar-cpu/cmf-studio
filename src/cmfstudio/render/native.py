@@ -258,6 +258,73 @@ class NativeDial:
                     raise NativeFormatError(f"ref tail at {old.at:#x} now points at a different image")
 
 
+# A full-screen static background node, byte-for-byte as in store dial 359 "Ring Data" (offset 0x81): 0x30 static ·
+# 0x01 struct x=0 y=0 w=466 h=466, no data source · ref tail with one image (base/size patched in).
+BACKGROUND_NODE = bytes.fromhex("301e00 011b00 0000 0000 d201 d201 00000000000000000000 610100 00000000 0000")
+
+
+def add_background(data: bytes) -> bytes:
+    """Insert a full-screen background image node at the bottom of the main screen (0x21), drawn first like in
+    Ring Data, pointing at a new black 466×466 image appended to the pool. Every later scene offset and every ref-tail
+    base shift by the node's length; header sizes and CRCs are rewritten; the result is re-parsed and verified.
+    Replace the new image afterwards like any other background (NativeDial(result).backgrounds())."""
+    dial = NativeDial(data)
+    if dial.backgrounds():
+        raise NativeFormatError("this face already has a main-screen background")
+    b = bytearray(dial.b)
+    first, end = dial.first_asset, len(b) - HEADER
+    screen = next((o for o, tag in _children(b, HEADER + 3, first) if tag == 0x21), None)
+    if screen is None:
+        raise NativeFormatError("no main screen (0x21) in this face")
+    # after the name (0x86) and catalogue preview (0x28) nodes, before the first drawable
+    insert_at = screen + 3
+    for off, tag in _children(b, screen + 3, screen + 3 + _u16(b, screen + 1)):
+        if tag not in (0x86, 0x28):
+            break
+        insert_at = off + 3 + _u16(b, off + 1)
+    grow = len(BACKGROUND_NODE)
+
+    black = compress(rgba_to_raster(np.zeros((466, 466, 4), dtype=np.uint8) + np.array([0, 0, 0, 255], np.uint8), 4))
+    block = struct.pack("<II", 4 | (466 << 10) | (466 << 21), len(black)) + black
+    new_asset = end + grow  # appended after the existing pool, which itself moves by `grow`
+
+    for t in dial.tails:  # pool moved: re-point every tail (they sit in the scene, before or after the insertion)
+        struct.pack_into("<I", b, t.at + 3, t.base + grow)
+    node = bytearray(BACKGROUND_NODE)
+    struct.pack_into("<I", node, 27, new_asset)
+    struct.pack_into("<H", node, 31, len(block))
+    b[insert_at:insert_at] = node
+    for container in (HEADER, screen):  # 0x20 root and 0x21 screen both contain the new node
+        struct.pack_into("<H", b, container + 1, _u16(b, container + 1) + grow)
+    b[len(b) - HEADER : len(b) - HEADER] = block  # before the footer
+
+    pool_start = first + grow
+    struct.pack_into("<I", b, 0x18, len(b) - HEADER)
+    struct.pack_into("<I", b, 0x1C, len(b) - HEADER - pool_start)
+    struct.pack_into("<I", b, 0x20, crc32_raw(bytes(b[pool_start : len(b) - HEADER])))
+    struct.pack_into("<I", b, 0x00, crc32_raw(bytes(b[4:pool_start])))
+    b[len(b) - HEADER :] = b[:HEADER]
+    out = bytes(b)
+
+    problems = validate(out)
+    if problems:
+        raise NativeFormatError("; ".join(problems))
+    check = NativeDial(out)
+    if len(check.tails) != len(dial.tails) + 1 or len(check.backgrounds()) != 1:
+        raise NativeFormatError("background node didn't land where expected")
+    for old, new in zip([t for t in dial.tails], [t for t in check.tails if t.base != new_asset], strict=True):
+        for a, z in zip(dial.chain(old), check.chain(new), strict=True):
+            if (a.cf, a.w, a.h, a.len) != (z.cf, z.w, z.h, z.len):
+                raise NativeFormatError("a ref tail points at a different image after the insertion")
+    return out
+
+
+def _children(b: bytes | bytearray, off: int, end: int):
+    while off < end:
+        yield off, b[off]
+        off += 3 + _u16(b, off + 1)
+
+
 def _decodes(block: bytes, need: int) -> bool:
     try:
         return len(lz4.block.decompress(block, uncompressed_size=need)) == need

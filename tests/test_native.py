@@ -224,3 +224,26 @@ def test_time_row_is_centred_on_both_screens(n):
         xs = np.argwhere(np.abs(img - background).max(axis=2) > 60)[:, 1]
         if len(xs):
             assert abs((xs.min() + xs.max()) / 2 - 233) <= 3, (n, aod, int(xs.min()), int(xs.max()))
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [362, 288])
+def test_add_background_to_layouts_without_one(n):
+    from cmfstudio.render.native import add_background
+
+    before = NativeDial(template(n))
+    out = add_background(template(n))
+    after = NativeDial(out)
+    assert validate(out) == [] and len(after.backgrounds()) == 1 and len(after.tails) == len(before.tails) + 1
+    with pytest.raises(NativeFormatError):
+        add_background(out)  # only once
+    # a picture background, end to end, survives the pool rebuild
+    from PIL import Image as PILImage
+
+    picture = PILImage.new("RGB", (466, 466), (200, 40, 40))
+    result = asyncio.run(build(NativeSpec(template=n, digit_color="#ffffff"), background_image=picture))
+    final = NativeDial(result.blob)
+    bg = final.decode(final.backgrounds()[0])
+    assert np.abs(bg[233, 233, :3].astype(int) - (200, 40, 40)).max() <= 12
+    img = np.asarray(native_preview.render(final, native_preview.sample_values()))
+    assert np.abs(img[233, 6, :3].astype(int) - (200, 40, 40)).max() <= 12, "preview draws the new background"

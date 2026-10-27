@@ -225,11 +225,8 @@
     <p class="muted tiny">Always-on screen digits keep their dim colour.</p>
 
     <h3>Background</h3>
-    {#if template && !template.has_background}
-      <p class="muted small">{template.name} draws black behind the time (it has no background image).</p>
-    {:else}
       <div class="seg">
-        {#each [["colour", "Colour"], ["gradient", "Gradient"], ["design", "Studio design"], ["template", "Template art"]] as [m, label]}
+        {#each [["colour", "Colour"], ["gradient", "Gradient"], ["design", "Studio design"], ...(template?.has_background ? [["template", "Template art"]] : [])] as [m, label]}
           <button class:on={bgMode === m} onclick={() => setBg(m)} disabled={m === "design" && !studioFaces.length}>{label}</button>
         {/each}
       </div>
@@ -243,7 +240,6 @@
           {#each studioFaces as f}<option value={f.id}>{f.name}</option>{/each}
         </select>
       {/if}
-    {/if}
 
     <h3>Show</h3>
     <label class="check"><input type="checkbox" bind:checked={spec.center_time} /> Centre the time on the screen</label>

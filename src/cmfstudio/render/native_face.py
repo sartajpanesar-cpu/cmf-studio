@@ -8,7 +8,8 @@ firmware's own clock logic stay intact:
 - every digit set (hours, minutes, small numbers) is re-drawn in the chosen font, fitted to the template's glyph box;
 - main-screen digits take the chosen colour; always-on (AOD) digits keep their dim template colour;
 - the main-screen background becomes a colour, a top→bottom gradient, or a picture (e.g. a Studio design rendered
-  without the firmware clock); the always-on background is left as the template's.
+  without the firmware clock); layouts without a background image get one added (``native.add_background``); the
+  always-on background is left as the template's.
 - the face-picker thumbnail is the preview, scaled down.
 """
 
@@ -27,7 +28,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from . import html, native_preview, raster
-from .native import NativeDial, NativeFormatError
+from .native import NativeDial, NativeFormatError, add_background
 from .spec import SIZE, Color, FaceSpec, FontRef
 
 TEMPLATE_DIR = Path(
@@ -98,7 +99,12 @@ async def build(
     spec: NativeSpec, background_image: Image.Image | None = None, values: dict[int, int] | None = None
 ) -> NativeResult:
     """``background_image`` (466×466) wins over the spec's background colours; ``values`` feed the preview."""
-    dial = NativeDial(template_path(spec.template).read_bytes())
+    data = template_path(spec.template).read_bytes()
+    bg_rgba = _background(spec, background_image)
+    plain_black = background_image is None and spec.background == "#000000" and not spec.background_bottom
+    if bg_rgba is not None and not plain_black and not NativeDial(data).backgrounds():
+        data = add_background(data)  # Steady / Type draw black behind the time: give them a background image
+    dial = NativeDial(data)
     warnings: list[str] = []
     glyphs = await render_digits(spec.font, spec.weight) if spec.font else None
 
@@ -123,11 +129,7 @@ async def build(
     if hidden:
         _hide(dial, hidden)
 
-    bg_rgba = _background(spec, background_image)
     if bg_rgba is not None:
-        plain_black = background_image is None and spec.background == "#000000" and not spec.background_bottom
-        if not dial.backgrounds() and not plain_black:
-            warnings.append(f"{TEMPLATES[spec.template][0]} has no background image (the watch draws black behind it)")
         for bg in dial.backgrounds():
             dial.replace(bg, bg_rgba)
 
