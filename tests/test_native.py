@@ -316,12 +316,13 @@ def test_tidy_lines_up_ring_data_widgets_and_returns_labels():
 
     dial = NativeDial(template(359))
     labels = _tidy(dial, show_date=True, show_data=True)
-    assert [t for t, _x, _y in labels] == ["KCAL", "KM", "BPM"]
+    assert [t for t, _x, _y in labels] == ["BPM"], "only the confirmed source is labelled"
     main = next(s for s in _scan(dial) if not s["aod"])
     rows = {dial.position(g["frame"])[1] for g in main["groups"]}
     assert rows == {DATA_ROW_Y}, "all data groups on one row"
-    xs = sorted(x for _t, x, _y in labels)
-    assert abs((xs[0] + xs[-1]) / 2 - 233) <= 2, "row centred"
+    lefts = sorted(dial.position(g["frame"])[0] for g in main["groups"])
+    widths = [int.from_bytes(dial.b[g["frame"] + 4 : g["frame"] + 6], "little") for g in main["groups"]]
+    assert abs((lefts[0] + lefts[-1] + widths[-1]) / 2 - 233) <= 2, "row centred"
     out = NativeDial(dial.build())
     icon = next(c for g in _scan(out)[0]["groups"] for c in g["children"] if c["tag"] == 0x30 and len(c["frames"]) == 1)
     assert out.decode(icon["frames"][0])[..., 3].max() == 0, "placeholder dashes blanked"

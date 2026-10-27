@@ -448,7 +448,9 @@ def _center_row(dial: NativeDial, found: list[dict], width: int) -> None:
 
 # -- tidying the layout's date and data widgets --------------------------------------------------------------------
 
-LABELS = {0x60: "KCAL", 0x1C: "KCAL", 0x1E: "KCAL", 0x48: "KCAL", 0x61: "KM", 0x22: "KM", 0x1A: "BPM", 0x19: "STEPS"}
+# Labels only where the watch confirmed the source (findings 2026-10-26): 0x1a = live heart rate. 0x60 / 0x61 aren't
+# calories / distance as the spec author's editor guessed; until identified they get no label.
+LABELS = {0x1A: "BPM"}
 DATA_ROW_Y = 318  # top of the tidied data row (below the time and date on every layout)
 
 

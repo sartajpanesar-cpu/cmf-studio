@@ -183,7 +183,7 @@ class NativeService:
             ],
         }
 
-    def plan(self, face_id: int, replace: int | None) -> tuple[int, int]:
+    def plan(self, face_id: int, replace: int | None, as_id: int | None = None) -> tuple[int, int]:
         """(old_id, new_id) for installing ``face_id``.
 
         What fw 1.0.0.57 does (findings 2026-10-26): a 9075 install with a stock face as old_id is accepted and
@@ -203,7 +203,7 @@ class NativeService:
             old = stock[0]
         else:
             raise LookupError("no stock face on the watch to install against")
-        new = self.spec(face_id).template
+        new = as_id if as_id is not None else self.spec(face_id).template
         if new in on_watch:
             raise LookupError(
                 f"a {dial_name(new)} face is already on the watch; the watch won't replace it — remove it first "
@@ -214,9 +214,7 @@ class NativeService:
         return old, new
 
     async def install(self, face_id: int, replace: int | None = None, as_id: int | None = None) -> dict[str, Any]:
-        old_id, new_id = self.plan(face_id, replace)
-        if as_id is not None:  # research: choose the id explicitly (e.g. re-use the old one)
-            new_id = as_id
+        old_id, new_id = self.plan(face_id, replace, as_id)  # as_id: research, choose the dial id explicitly
         result = await self.build(self.spec(face_id))
         self.faces_dir.mkdir(parents=True, exist_ok=True)
         bin_path = self.faces_dir / f"native-{face_id}-{new_id}.bin"
