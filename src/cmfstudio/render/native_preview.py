@@ -114,8 +114,7 @@ def render(dial: NativeDial, values: dict[int, int], aod: bool = False, transpar
             return
         fx, fy, fw, fh, gap = frame
         sizes = [_measure(tag, cbody, cn) for tag, cbody, cn in items]
-        total = sum(w for w, _ in sizes) + gap * max(0, len(sizes) - 1)
-        x = fx + max(0, (fw - total) // 2)
+        x = fx  # the watch lays a group out from the frame's left edge (owner's watch, 2026-10-27)
         for (tag, cbody, cn), (w, h) in zip(items, sizes, strict=True):
             draw_node(tag, cbody, cn, (x, fy + max(0, (fh - h) // 2)))
             x += w + gap

@@ -316,13 +316,14 @@ def test_tidy_lines_up_ring_data_widgets_and_returns_labels():
 
     dial = NativeDial(template(359))
     labels = _tidy(dial, show_date=True, show_data=True)
-    assert [t for t, _x, _y in labels] == ["BPM"], "only the confirmed source is labelled"
+    assert [t for t, _x, _y in labels] == ["REST", "STEPS", "BPM"]
     main = next(s for s in _scan(dial) if not s["aod"])
     rows = {dial.position(g["frame"])[1] for g in main["groups"]}
     assert rows == {DATA_ROW_Y}, "all data groups on one row"
-    lefts = sorted(dial.position(g["frame"])[0] for g in main["groups"])
-    widths = [int.from_bytes(dial.b[g["frame"] + 4 : g["frame"] + 6], "little") for g in main["groups"]]
-    assert abs((lefts[0] + lefts[-1] + widths[-1]) / 2 - 233) <= 2, "row centred"
+    widths = [dial.u16(g["frame"] + 4) for g in main["groups"]]
+    assert set(widths) == {100} and {dial.u16(g["frame"] + 8) for g in main["groups"]} == {0}, "wider, no gap"
+    centres = [x for _t, x, _y in labels]
+    assert centres[1] == 233 and centres[0] + centres[2] == 466, "label blocks evenly around the centre"
     out = NativeDial(dial.build())
     icon = next(c for g in _scan(out)[0]["groups"] for c in g["children"] if c["tag"] == 0x30 and len(c["frames"]) == 1)
     assert out.decode(icon["frames"][0])[..., 3].max() == 0, "placeholder dashes blanked"

@@ -447,11 +447,13 @@ def _center_row(dial: NativeDial, found: list[dict], width: int) -> None:
 
 # -- tidying the layout's date and data widgets --------------------------------------------------------------------
 
-# Labels only where the watch confirmed the source (findings 2026-10-26): 0x1a = live heart rate. 0x60 / 0x61 aren't
-# calories / distance as the spec author's editor guessed; until identified they get no label.
-LABELS = {0x1A: "BPM"}
+# Labels from reading the watch against synced data (findings 2026-10-27): 0x1a = live heart rate, 0x61 = steps,
+# 0x60 = resting heart rate (likely). The spec author's editor had guessed calories / distance for 0x60 / 0x61.
+LABELS = {0x1A: "BPM", 0x61: "STEPS", 0x60: "REST"}
+TYPICAL_DIGITS = {0x61: 4}  # where a label sits: under the number's usual width (numbers start at the frame's left)
 DATA_ROW_Y = 318  # top of the tidied data row (below the time and date on every layout)
 DATA_FRAME_W = 100  # each data widget's frame (the templates' 74 px clipped 2-3 digit numbers)
+DATA_STEP = 112  # distance between the data widgets' centres
 
 
 def _scan(dial: NativeDial) -> list[dict]:
@@ -538,20 +540,23 @@ def _tidy(dial: NativeDial, show_date: bool, show_data: bool) -> list[tuple[str,
         # The watch lays each group out as a row (icon, two hidden "no data" marks, number) with the frame's gap
         # between items, hidden ones included, and clips at the frame: numbers were cut off on the watch
         # (2026-10-26). So: no gap, and a wider frame.
-        width, gap = DATA_FRAME_W, 16
-        x = (SIZE - (width * len(data) + gap * (len(data) - 1))) // 2
-        for g in data:
-            fh = dial.u16(g["frame"] + 6)
+        width, step = DATA_FRAME_W, DATA_STEP
+        centres = [SIZE // 2 + round((i - (len(data) - 1) / 2) * step) for i in range(len(data))]
+        for g, centre in zip(data, centres, strict=True):
+            number = next((c for c in g["children"] if c["tag"] == 0x60), None)
+            gw, gh = (number["frames"][0].w, number["frames"][0].h) if number else (16, 30)
+            source = number["src"] if number else 0
+            # the watch draws the number from the frame's left edge (the label sat to its right, 2026-10-27), so
+            # start the frame half a typical number left of the block's centre; the frame stays wide for overflow
+            x = centre - gw * TYPICAL_DIGITS.get(source, 2) // 2
             dial.move(g["frame"], x, DATA_ROW_Y)
             dial.set_u16(g["frame"] + 4, width)
+            dial.set_u16(g["frame"] + 6, gh)  # as tall as the digits: the label goes right under them
             dial.set_u16(g["frame"] + 8, 0)
-            w = width
-            source = next((c["src"] for c in g["children"] if c["tag"] == 0x60), 0)
-            labels.append((LABELS.get(source, ""), x + w // 2, DATA_ROW_Y + fh + 4))
+            labels.append((LABELS.get(source, ""), centre, DATA_ROW_Y + gh + 4))
             for c in g["children"]:  # the "–" placeholder icons: 1 px, so they don't push the number off the frame
                 if c["tag"] == 0x30 and len(c["frames"]) == 1:
                     dial.replace(c["frames"][0], np.zeros((1, 1, 4), dtype=np.uint8), resize=True)
-            x += w + gap
     return [lbl for lbl in labels if lbl[0]]
 
 
