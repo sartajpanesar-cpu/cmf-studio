@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import struct
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -452,6 +451,7 @@ def _center_row(dial: NativeDial, found: list[dict], width: int) -> None:
 # calories / distance as the spec author's editor guessed; until identified they get no label.
 LABELS = {0x1A: "BPM"}
 DATA_ROW_Y = 318  # top of the tidied data row (below the time and date on every layout)
+DATA_FRAME_W = 100  # each data widget's frame (the templates' 74 px clipped 2-3 digit numbers)
 
 
 def _scan(dial: NativeDial) -> list[dict]:
@@ -535,13 +535,17 @@ def _tidy(dial: NativeDial, show_date: bool, show_data: bool) -> list[tuple[str,
         data = [g for g in screen["groups"] if any(c["src"] not in (0, *TIME_IDS, *DATE_IDS) for c in g["children"])]
         if not data:
             continue
-        b = dial.b
-        widths = [struct.unpack_from("<H", b, g["frame"] + 4)[0] for g in data]
-        gap = 28
-        x = (SIZE - (sum(widths) + gap * (len(data) - 1))) // 2
-        for g, w in zip(data, widths, strict=True):
-            fh = struct.unpack_from("<H", b, g["frame"] + 6)[0]
+        # The watch lays each group out as a row (icon, two hidden "no data" marks, number) with the frame's gap
+        # between items, hidden ones included, and clips at the frame: numbers were cut off on the watch
+        # (2026-10-26). So: no gap, and a wider frame.
+        width, gap = DATA_FRAME_W, 16
+        x = (SIZE - (width * len(data) + gap * (len(data) - 1))) // 2
+        for g in data:
+            fh = dial.u16(g["frame"] + 6)
             dial.move(g["frame"], x, DATA_ROW_Y)
+            dial.set_u16(g["frame"] + 4, width)
+            dial.set_u16(g["frame"] + 8, 0)
+            w = width
             source = next((c["src"] for c in g["children"] if c["tag"] == 0x60), 0)
             labels.append((LABELS.get(source, ""), x + w // 2, DATA_ROW_Y + fh + 4))
             for c in g["children"]:  # the "–" placeholder icons: 1 px, so they don't push the number off the frame

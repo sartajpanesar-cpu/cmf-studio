@@ -222,6 +222,15 @@ class NativeDial:
         self._bytes[flag] = 0
         return True
 
+    def set_u16(self, offset: int, value: int) -> None:
+        """Patch a little-endian u16 in the scene (same length), e.g. a 0x48 frame's width or gap."""
+        self._bytes[offset] = value & 0xFF
+        self._bytes[offset + 1] = value >> 8
+
+    def u16(self, offset: int) -> int:
+        lo, hi = self._bytes.get(offset, self.b[offset]), self._bytes.get(offset + 1, self.b[offset + 1])
+        return lo | hi << 8
+
     def position(self, struct_body: int) -> tuple[int, int]:
         return self._moves.get(struct_body) or struct.unpack_from("<hh", self.b, struct_body)
 

@@ -106,7 +106,7 @@ def render(dial: NativeDial, values: dict[int, int], aod: bool = False, transpar
         for tag, cbody, cn in children(body, body + n):
             if tag == 0x48:
                 fx, fy = dial.position(cbody)  # a 0x48 frame starts with x, y like a struct (moves apply)
-                fw, fh, gap = struct.unpack_from("<HHH", b, cbody + 4)
+                fw, fh, gap = dial.u16(cbody + 4), dial.u16(cbody + 6), dial.u16(cbody + 8)
                 frame = (fx, fy, fw, fh, gap)
             elif tag in (0x30, 0x60) and visible(cbody, cn):
                 items.append((tag, cbody, cn))
