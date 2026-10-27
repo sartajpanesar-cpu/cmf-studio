@@ -1,8 +1,9 @@
 """cmfkit's simulated watch, extended with what the Pro 2 does that cmfkit's sim (a Watch 3 Pro) doesn't:
 
 - after each TIME it pushes DIAL_COMMAND_RET with its dial list (findings 2026-10-25);
-- structured dial install over 9075 replaces an existing dial (spec §11.2 / §11.4): ``old_id`` must be in the
-  list, the file must pass the structured-dial validation, else the finish byte is 0x0a;
+- structured dial install over 9075 (spec §11.2 / §11.4): ``old_id`` must be in the list, ``new_id`` must not be,
+  the file must validate and there must be a free slot (max 7), else finish 0x0a. Like the real watch (findings
+  2026-10-26), the new dial is **appended** and becomes active; old_id stays;
 - settings: GET (cmd2 0002) answers on the SET opcode with the stored value, SET (0001) stores and acks (0003).
   Initial values are what the owner's watch returned (probe 2026-10-26), and writes behave as measured that day:
   alarms go in big-endian and come back little-endian, sorted by time, byte 7 set; goal writes are acked but the
@@ -101,13 +102,13 @@ class StudioSim(SimWatch):
         blob = bytes(self._upload or b"")
         self._upload, self._structured = None, None
         problems = native.validate(blob)
-        if old_id not in self.state.dials or new_id in self.state.dials or problems:
-            self.on_event(f"structured dial rejected: old={old_id} new={new_id} {problems}")
+        full = len(self.state.dials) >= 7
+        if old_id not in self.state.dials or new_id in self.state.dials or problems or full:
+            self.on_event(f"structured dial rejected: old={old_id} new={new_id} full={full} {problems}")
             self._reply(ops.WF_FINISH_REQUEST, b"\x0a")
             return
-        index = self.state.dials.index(old_id)
-        self.state.dials[index] = new_id
-        self.active_index = index
+        self.state.dials.append(new_id)  # the real watch appends; old_id stays (findings 2026-10-26)
+        self.active_index = len(self.state.dials) - 1
         self.native[new_id] = blob
         self.on_event(f"structured dial {new_id} installed over {old_id} ({len(blob)} bytes)")
         self._reply(ops.WF_FINISH_REQUEST, b"\x01")

@@ -1,9 +1,8 @@
 """Native faces inside watchd: templates, preview, save, and install over a stock face's slot.
 
-A structured install REPLACES an existing dial (spec §11.4): the owner picks which stock face gives up its slot the
-first time; after that a native face updates by replacing the native face already on the watch. The new id must
-differ from the one it replaces (re-using an id in place is rejected, spec §11.2), so updates alternate between
-template ids. Whether the watch cares that an id matches its file's content is unverified — see findings.
+The spec calls a structured install (9075) a replace, but on fw 1.0.0.57 it ADDS the face (findings 2026-10-26),
+under the layout's own id; installing a layout that's already on the watch is rejected, so each layout can be on the
+watch once until that face is removed (there's no known delete command yet), and the watch holds 7 faces.
 """
 
 from __future__ import annotations
@@ -185,26 +184,34 @@ class NativeService:
         }
 
     def plan(self, face_id: int, replace: int | None) -> tuple[int, int]:
-        """(old_id, new_id) for installing face_id: over our native face if one is on the watch, else over
-        the stock face the owner chose."""
+        """(old_id, new_id) for installing ``face_id``.
+
+        What fw 1.0.0.57 does (findings 2026-10-26): a 9075 install with a stock face as old_id is accepted and
+        **adds** the new face (old_id stays); re-using an id, or naming one of our own native faces as old_id, is
+        rejected. So: old_id = the chosen (or first) stock face, new_id = the layout's own id, which must not be on
+        the watch yet, and there must be a free slot."""
         d = self.link.dials
         if not d:
             raise LookupError("the watch hasn't reported its dial list yet (it does after connecting)")
-        on_watch = set(d["ids"])
-        ours = [i for i in self.native_ids() if i in on_watch]
-        if ours:
-            old = ours[0]
-        elif replace is None:
-            raise LookupError("choose which stock face this native face replaces")
-        elif replace not in on_watch or replace == CUSTOM_DIAL_ID:
-            raise LookupError(f"{dial_name(replace)} can't be replaced (not a stock face on the watch)")
-        else:
+        on_watch = list(d["ids"])
+        stock = [i for i in on_watch if i != CUSTOM_DIAL_ID and i not in self.native_ids() and i not in TEMPLATES]
+        if replace is not None:
+            if replace not in stock:
+                raise LookupError(f"{dial_name(replace)} can't be used (not a stock face on the watch)")
             old = replace
-        template = self.spec(face_id).template
-        for candidate in (template, *TEMPLATES):
-            if candidate not in on_watch and candidate != old:
-                return old, candidate
-        raise LookupError("no free dial id to install under")
+        elif stock:
+            old = stock[0]
+        else:
+            raise LookupError("no stock face on the watch to install against")
+        new = self.spec(face_id).template
+        if new in on_watch:
+            raise LookupError(
+                f"a {dial_name(new)} face is already on the watch; the watch won't replace it — remove it first "
+                "(Nothing X), or use another layout"
+            )
+        if len(on_watch) >= d.get("max", 7):
+            raise LookupError(f"the watch is full ({len(on_watch)} of {d.get('max', 7)} faces); remove one first")
+        return old, new
 
     async def install(self, face_id: int, replace: int | None = None, as_id: int | None = None) -> dict[str, Any]:
         old_id, new_id = self.plan(face_id, replace)

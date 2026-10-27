@@ -473,10 +473,10 @@ class WatchLink:
         async with self._op() as s:
             result = await s.upload_structured_dial(blob, old_id, new_id)
             await asyncio.sleep(self.settle_s)
-        if result == 1 and self.dials:
-            ids = [new_id if i == old_id else i for i in self.dials["ids"]]
+        if result == 1 and self.dials:  # fw 1.0.0.57 appends the new dial; old_id stays (findings 2026-10-26)
+            ids = [*self.dials["ids"], new_id] if new_id not in self.dials["ids"] else list(self.dials["ids"])
             index = ids.index(new_id)
-            self.dials = {**self.dials, "ids": ids, "active_index": index, "active_id": new_id}
+            self.dials = {**self.dials, "ids": ids, "total": len(ids), "active_index": index, "active_id": new_id}
         return result
 
     def _mark_custom_active(self) -> None:

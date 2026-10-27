@@ -148,31 +148,28 @@ async def wait_job(c, job_id):
 
 
 @needs_templates
-async def test_install_replaces_the_chosen_stock_face_then_updates_in_place(native_api):
+async def test_install_adds_a_face_once_per_layout_until_full(native_api):
     c, watch, _store = native_api
-    dials = (await c.get("/watch/dials")).json()
-    assert [d["id"] for d in dials["dials"]][:4] == [275, 352, 276, 280]
+    assert [d["id"] for d in (await c.get("/watch/dials")).json()["dials"]][:4] == [275, 352, 276, 280]
     face = (await c.post("/native/faces", json={"name": "gold", "template": 362, "digit_color": "#e8c66a"})).json()
-
-    r = await c.post(f"/native/faces/{face['id']}/install", params={"replace": 275})
-    assert r.status_code == 400, "confirm is required"
-    r = await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True})
-    assert r.status_code == 409, "first install needs a stock face to replace"
+    assert (await c.post(f"/native/faces/{face['id']}/install", params={"replace": 275})).status_code == 400
 
     r = (await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True, "replace": 275})).json()
     assert r["replaces"] == {"id": 275, "name": "SlopeTime"} and r["installs_as"] == 362
     assert (await wait_job(c, r["job"]["id"]))["state"] == "done"
-    assert watch.state.dials[0] == 362 and validate(watch.native[362]) == []
-    listed = (await c.get("/watch/dials")).json()["dials"][0]
+    assert 275 in watch.state.dials and watch.state.dials[-1] == 362, "added, like the real watch"
+    listed = (await c.get("/watch/dials")).json()["dials"][-1]
     assert listed == {"id": 362, "name": "Steady", "active": True, "kind": "native"}
 
-    # an update replaces our own native face (alternating ids: the same id in place is rejected, spec §11.2)
-    r = (await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True})).json()
-    assert r["replaces"]["id"] == 362 and r["installs_as"] != 362
-    assert (await wait_job(c, r["job"]["id"]))["state"] == "done"
-    assert watch.state.dials[0] == r["installs_as"] and 275 not in watch.state.dials
-    faces = (await c.get("/native/faces")).json()
-    assert faces[0]["dial_id"] == r["installs_as"]
+    again = await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True})
+    assert again.status_code == 409 and "already on the watch" in again.json()["detail"]
+
+    for n, template in enumerate((359, 288)):  # fill the remaining slots (5 → 7)
+        other = (await c.post("/native/faces", json={"name": f"f{n}", "template": template})).json()
+        r = (await c.post(f"/native/faces/{other['id']}/install", params={"confirm": True})).json()
+        if "job" in r:
+            await wait_job(c, r["job"]["id"])
+    assert len(watch.state.dials) == 7
 
 
 @needs_templates

@@ -51,7 +51,6 @@
   let saved = $state<any[]>([]);
   let studioFaces = $state<{ id: number; name: string }[]>([]);
   let dials = $state<{ known: boolean; dials: Dial[] }>({ known: false, dials: [] });
-  let replace = $state<number | null>(null);
   let confirming = $state(false);
   let installing = $state<string | null>(null);
 
@@ -59,9 +58,9 @@
     spec.background_face_id != null ? "design" : spec.background_bottom ? "gradient" : spec.background ? "colour" : "template",
   );
   const template = $derived(templates.find((t) => t.id === spec.template));
-  const onWatch = $derived(dials.dials.find((d) => d.kind === "native"));
-  const stock = $derived(dials.dials.filter((d) => d.kind === "stock"));
-  const target = $derived(onWatch ?? stock.find((d) => d.id === replace));
+  // the watch ADDS native faces (it won't replace one), one per layout, 7 faces at most (findings 2026-10-26)
+  const layoutOnWatch = $derived(dials.dials.some((d) => d.id === spec.template));
+  const full = $derived(dials.known && dials.dials.length >= ((dials as any).max ?? 7));
 
   function loadDraft(): Spec {
     try {
@@ -149,14 +148,14 @@
     try {
       const id = await save();
       installing = "Sending to the watch…";
-      const params = new URLSearchParams({ confirm: "true", ...(onWatch ? {} : { replace: String(replace) }) });
+      const params = new URLSearchParams({ confirm: "true" });
       const r = await post(`/native/faces/${id}/install?${params}`);
       let job = r.job;
       while (!["done", "failed", "expired"].includes(job.state)) {
         await new Promise((res) => setTimeout(res, 1500));
         job = await get(`/jobs/${job.id}`);
       }
-      notice = job.state === "done" ? `Installed over ${r.replaces.name} — it's on your watch now.` : null;
+      notice = job.state === "done" ? "Added to your watch and showing now." : null;
       if (job.state !== "done") error = `Install ${job.state}: ${job.error ?? ""}`;
       confirming = false;
       await load();
@@ -280,24 +279,20 @@
     <div class="install">
       {#if !dials.known}
         <p class="muted small">Waiting for the watch to report its faces (it does after connecting).</p>
-      {:else if onWatch}
-        <p class="small">Installing updates the native face already on your watch.</p>
       {:else}
-        <label class="small">Replace which face on the watch?
-          <select bind:value={replace}>
-            <option value={null}>Choose a stock face…</option>
-            {#each stock as d}<option value={d.id}>{d.name}{d.active ? " (showing now)" : ""}</option>{/each}
-          </select>
-        </label>
+        <p class="small muted">Faces on the watch: {dials.dials.length} of {(dials as any).max ?? 7}. Installing adds this as a new face.</p>
+        {#if layoutOnWatch}
+          <p class="small warn">A {template?.name} face is already on your watch, and the watch won't overwrite it. Remove it in the Nothing X app first, or pick another layout.</p>
+        {:else if full}
+          <p class="small warn">The watch is full. Remove a face in the Nothing X app first.</p>
+        {/if}
       {/if}
       {#if !confirming}
-        <button class="primary" disabled={!dials.known || (!onWatch && replace == null) || !!installing} onclick={() => (confirming = true)}>Install on watch</button>
+        <button class="primary" disabled={!dials.known || layoutOnWatch || full || !!installing} onclick={() => (confirming = true)}>Install on watch</button>
       {:else}
-        <p class="small confirm">
-          This replaces <strong>{target?.name}</strong> on your watch{target?.kind === "stock" ? " (you can get it back from the Nothing X app)" : ""}. The new face shows straight away.
-        </p>
+        <p class="small confirm">This adds the face to your watch and shows it straight away. Nothing is replaced.</p>
         <div class="row">
-          <button class="primary" disabled={!!installing} onclick={install}>{installing ?? "Replace and install"}</button>
+          <button class="primary" disabled={!!installing} onclick={install}>{installing ?? "Add to watch"}</button>
           <button disabled={!!installing} onclick={() => (confirming = false)}>Cancel</button>
         </div>
       {/if}
