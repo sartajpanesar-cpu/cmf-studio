@@ -219,3 +219,75 @@ def test_style3_matches_three_photographed_anchors():
     # one-row styles left-align "1": its first dot is in the slot's first column
     xs = [cx for cx, cy, r in clock.shape(2, 0, 0, __import__("datetime").datetime(2026, 1, 1, 11, 27)).dots]
     assert min(xs) < 20 + 14
+
+
+# -- hardening (docs/07-threat-model.md): specs also arrive from the API and MCP ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"layers": [{"type": "text", "text": "x", "font": "A'};x:url(//evil)"}]},
+        {"fonts": [{"family": 'Inter"><script>', "source": "google"}]},
+        {"layers": [{"type": "image", "src": 'data:image/png;base64,AA" onerror="x'}]},
+    ],
+)
+def test_spec_rejects_markup_in_fonts_and_data_uris(bad):
+    with pytest.raises(ValueError):
+        FaceSpec.model_validate({"name": "x", **bad})
+
+
+def test_local_files_only_from_the_spec_folder_and_only_assets(tmp_path):
+    (tmp_path / "secret.txt").write_text("hunter2")
+    Image.new("RGB", (2, 2)).save(tmp_path / "ok.png")
+    sub = tmp_path / "face"
+    sub.mkdir()
+
+    def page(src, base):
+        return html.build(FaceSpec.model_validate({"name": "x", "layers": [{"type": "image", "src": src}]}), CTX, base)
+
+    for src in ("../secret.txt", "../ok.png", str(tmp_path / "ok.png")):
+        with pytest.raises(ValueError):
+            page(src, sub)
+    with pytest.raises(ValueError, match="only data: URIs"):
+        page("ok.png", None)  # API / MCP renders
+    assert "data:image/png;base64," in page("ok.png", tmp_path)
+
+
+@needs_browser
+def test_render_runs_no_scripts_and_reaches_no_other_hosts(tmp_path):
+    hits = []
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            hits.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    page = (
+        f'<html><body style="background:#000"><img src="{url}/img">'
+        f'<script>fetch("{url}/js"); document.body.style.background="#fff"</script></body></html>'
+    )
+    from cmfstudio.render import raster
+
+    png = asyncio.run(raster.render_png(page))
+    srv.shutdown()
+    assert hits == [], "no request may leave the render page except to Google Fonts"
+    assert Image.open(io.BytesIO(png)).convert("RGB").getpixel((233, 233)) == (0, 0, 0), "script must not run"
+
+
+def test_google_fonts_load_each_weight_separately():
+    """A weight the font lacks must not take the whole font down with it (Orbitron has no 300)."""
+    spec = FaceSpec.model_validate({"name": "x", "fonts": [{"family": "Orbitron", "weights": [300, 700]}]})
+    page = html.build(spec, CTX)
+    assert 'href="https://fonts.googleapis.com/css2?family=Orbitron&display=block"' in page
+    assert "family=Orbitron:wght@300&" in page and "family=Orbitron:wght@700&" in page
+    assert "wght@300;700" not in page

@@ -13,12 +13,15 @@ import datetime as dt
 import hashlib
 import io
 import json
+import os
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
+import httpx
+from cmfkit.protocol import opcodes as ops
 from cmfkit.watchface import photo
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -29,9 +32,29 @@ from pydantic import BaseModel, Field
 
 from ..ble.link import LinkError, LinkState, WatchLink
 from ..core import claude
+from ..core import settings as settings_mod
 from ..core.jobs import JobQueue
-from ..render import clock, describe
+from ..core.media import MediaService, MediaSettings
+from ..core.rules import RulesEngine
+from ..core.settings import (
+    Alarm,
+    ContactLine,
+    Goals,
+    HrAlerts,
+    RawSetting,
+    Reminder,
+    SettingsError,
+    SettingsService,
+    Switch,
+    Units,
+    WriteResult,
+)
+from ..core.weather import WeatherService, WeatherSettings, geocode
+from ..render import clock, describe, native_face
 from ..render import html as render_html
+from ..render.native import NativeFormatError
+from ..render.native_face import NativeSpec
+from ..render.native_service import NativeService, preview_payload
 from ..render.service import FaceService
 from ..render.spec import FaceSpec
 from ..store.db import Job, Store
@@ -81,8 +104,15 @@ def create_app(
     sync: SyncManager | None = None,
     faces: FaceService | None = None,
     ui_dir: Path | None = None,
+    rules: RulesEngine | None = None,
+    native: NativeService | None = None,
+    weather: WeatherService | None = None,
+    settings: SettingsService | None = None,
+    media: MediaService | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="cmf-studio watchd", version="0.1.0")
+    # no /docs, /redoc or /openapi.json: they were the only routes served without the token (security review)
+    app = FastAPI(title="cmf-studio watchd", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+    research = os.environ.get("CMF_RESEARCH") == "1"  # raw settings writes / explicit dial ids: off by default
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     def auth(request: Request) -> None:
@@ -190,6 +220,8 @@ def create_app(
             result = await need_faces().install(face_id, force=force)
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such face") from None
+        except LookupError as exc:  # native: layout already on the watch, watch full, …
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
         if "job" in result and link.connected.is_set():
             try:
                 job = await queue.wait(result["job"]["id"], WAIT_S)
@@ -197,6 +229,14 @@ def create_app(
             except TimeoutError:
                 pass
         return result
+
+    @app.post("/faces/native-clock", dependencies=[Depends(auth)])
+    async def post_face_native_clock(spec: FaceSpec, full: bool = False) -> dict[str, Any]:
+        """The design's font clock as the watch will draw it: alone on a transparent canvas (to lay over the live
+        preview), or with ``full`` the whole native face."""
+        if spec.native_clock is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "this design uses a built-in clock style")
+        return await native_call(need_native().design_preview(spec, overlay_only=not full))
 
     @app.post("/faces/describe", dependencies=[Depends(auth)])
     async def post_face_describe(body: DescribeIn) -> dict[str, Any]:
@@ -318,6 +358,282 @@ def create_app(
     @app.get("/events", dependencies=[Depends(auth)])
     async def get_events(limit: int = Query(100, ge=1, le=1000), kind: str | None = None) -> list[dict[str, Any]]:
         return store.events(limit, kind)
+
+    # -- native faces (structured dials: firmware-drawn time in your font) -------------------------------------
+
+    def need_native() -> NativeService:
+        if native is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "native faces not configured")
+        return native
+
+    async def native_call(coro):  # type: ignore[no-untyped-def]
+        try:
+            return await coro
+        except FileNotFoundError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        except NativeFormatError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+    @app.get("/native/templates", dependencies=[Depends(auth)])
+    async def get_native_templates() -> list[dict[str, Any]]:
+        return native_face.available_templates()
+
+    @app.post("/native/preview", dependencies=[Depends(auth)])
+    async def post_native_preview(spec: NativeSpec) -> dict[str, Any]:
+        return preview_payload(await native_call(need_native().build(spec)))
+
+    @app.get("/native/faces", dependencies=[Depends(auth)])
+    async def get_native_faces() -> list[dict[str, Any]]:
+        return [{**f, "spec": json.loads(f.pop("spec_json"))} for f in store.native_faces()]
+
+    @app.post("/native/faces", dependencies=[Depends(auth)])
+    async def post_native_face(spec: NativeSpec) -> dict[str, Any]:
+        return {"id": need_native().save(spec)}
+
+    @app.post("/native/faces/{face_id}/install", dependencies=[Depends(auth)])
+    async def post_native_install(
+        face_id: int,
+        confirm: bool = Query(False, description="required: replaces a face on the watch"),
+        replace: int | None = Query(None, description="stock dial id to replace (first install only)"),
+        as_id: int | None = Query(None, description="research: the dial id to install as (default: alternate)"),
+    ) -> dict[str, Any]:
+        if not confirm:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "installing replaces a face on the watch; send confirm=true"
+            )
+        try:
+            need_native().spec(face_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such native face") from None
+        if as_id is not None and not research:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "as_id is a research option: start watchd with CMF_RESEARCH=1"
+            )
+        return await native_call(need_native().install(face_id, replace, as_id))
+
+    @app.get("/watch/dials", dependencies=[Depends(auth)])
+    async def get_watch_dials() -> dict[str, Any]:
+        return need_native().dials()
+
+    # -- weather + glance line -------------------------------------------------------------------------------
+
+    def need_weather() -> WeatherService:
+        if weather is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "weather not configured")
+        return weather
+
+    @app.get("/weather", dependencies=[Depends(auth)])
+    async def get_weather() -> dict[str, Any]:
+        w = need_weather()
+        return {"settings": w.settings().model_dump(), "last": w.last(), "error": w.last_error}
+
+    @app.put("/weather/settings", dependencies=[Depends(auth)])
+    async def put_weather_settings(settings: WeatherSettings) -> dict[str, Any]:
+        return need_weather().save(settings).model_dump()
+
+    @app.get("/weather/places", dependencies=[Depends(auth)])
+    async def get_weather_places(q: str = Query(min_length=2, max_length=80)) -> list[dict[str, Any]]:
+        try:
+            async with need_weather().client_factory() as client:
+                return await geocode(client, q)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"place search failed: {exc!r}") from exc
+
+    @app.post("/weather/push", dependencies=[Depends(auth)])
+    async def post_weather_push() -> dict[str, Any]:
+        try:
+            return await need_weather().push()
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"forecast fetch failed: {exc!r}") from exc
+
+    # -- watch settings (read-modify-write, every write verified by reading it back) ---------------------------
+
+    def need_settings() -> SettingsService:
+        if settings is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "settings not configured")
+        return settings
+
+    async def settings_call(coro):  # type: ignore[no-untyped-def]
+        try:
+            result = await coro
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+        except SettingsError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+        if isinstance(result, WriteResult):
+            store.add_event("settings", {"ok": result.ok, "encoding": result.encoding, "tried": result.tried})
+            if not result.ok:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY, f"the watch didn't take the change (tried {result.tried})"
+                )
+            return result.public()
+        return result
+
+    @app.get("/settings", dependencies=[Depends(auth)])
+    async def get_settings() -> dict[str, Any]:
+        return await settings_call(need_settings().snapshot())
+
+    @app.put("/settings/alarms", dependencies=[Depends(auth)])
+    async def put_alarms(alarms: list[Alarm]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_alarms(alarms))
+
+    @app.put("/settings/goals", dependencies=[Depends(auth)])
+    async def put_goals(goals: Goals) -> dict[str, Any]:
+        return await settings_call(need_settings().set_goals(goals))
+
+    @app.put("/settings/switch/{name}", dependencies=[Depends(auth)])
+    async def put_switch(name: Literal["dnd", "wrist_raise", "time_format"], body: Switch) -> dict[str, Any]:
+        """``time_format``: on = 12-hour."""
+        return await settings_call(need_settings().set_simple(name, body.on))
+
+    @app.put("/settings/reminders/{name}", dependencies=[Depends(auth)])
+    async def put_reminder(name: Literal["standing_reminder", "water_reminder"], body: Reminder) -> dict[str, Any]:
+        return await settings_call(need_settings().set_reminder(name, body))
+
+    @app.put("/settings/sports", dependencies=[Depends(auth)])
+    async def put_sports(codes: list[int]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_sports(codes))
+
+    @app.put("/settings/monitoring/{kind}", dependencies=[Depends(auth)])
+    async def put_monitoring(kind: Literal["heart_rate", "spo2", "stress"], body: Switch) -> dict[str, Any]:
+        return await settings_call(need_settings().set_monitoring(kind, body.on))
+
+    @app.put("/settings/hr_alerts", dependencies=[Depends(auth)])
+    async def put_hr_alerts(body: HrAlerts) -> dict[str, Any]:
+        return await settings_call(need_settings().set_hr_alerts(body.low, body.high, body.sport_high, body.spo2_low))
+
+    @app.put("/settings/units", dependencies=[Depends(auth)])
+    async def put_units(body: Units) -> dict[str, Any]:
+        return await settings_call(need_settings().set_units(body.metric, body.celsius))
+
+    @app.get("/settings/tiles", dependencies=[Depends(auth)])
+    async def get_tiles() -> dict[str, Any]:
+        """Home screens and their cards — read-only (a bad tile write blanks the watch's screens)."""
+        try:
+            return {"screens": await need_settings().tiles()}
+        except TimeoutError as exc:
+            raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, "the watch didn't answer the tiles request") from exc
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+
+    @app.get("/settings/contacts", dependencies=[Depends(auth)])
+    async def get_contacts() -> dict[str, Any]:
+        backups = json.loads(store.get_kv("contacts_backups") or "[]")
+        return {"contacts": await settings_call(need_settings().contacts()), "backups": backups}
+
+    @app.put("/settings/contacts", dependencies=[Depends(auth)])
+    async def put_contacts(entries: list[ContactLine]) -> dict[str, Any]:
+        return await settings_call(need_settings().set_contacts(entries))
+
+    @app.get("/settings/written", dependencies=[Depends(auth)])
+    async def get_written_settings() -> dict[str, Any]:
+        """Write-only settings as last sent from here (the watch can't report them)."""
+        return {k: json.loads(store.get_kv(k) or "null") for k in ("hr_alerts", "units", "monitoring", "goals_sent")}
+
+    @app.post("/find-watch", dependencies=[Depends(auth)])
+    async def post_find_watch() -> dict[str, Any]:
+        try:
+            return {"acked": await link.find_watch()}
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"the watch isn't connected ({exc})") from exc
+
+    @app.post("/settings/raw", dependencies=[Depends(auth)])
+    async def post_settings_raw(body: RawSetting) -> dict[str, Any]:
+        """Research: write raw bytes to one settings group (SET 0001, Tier 1), then read it back. Settings groups
+        only; never exposed over MCP. Used to learn write formats (research/findings.md)."""
+        if not research:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "research endpoint: start watchd with CMF_RESEARCH=1")
+        if body.name not in settings_mod.GROUPS:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"settings groups only: {sorted(settings_mod.GROUPS)}")
+        cmd1 = settings_mod.GROUPS[body.name]
+        try:
+            acked = await link.write_setting(cmd1, 0x0001, bytes.fromhex(body.hex), 0x0003)
+            back = await link.read_setting(cmd1)
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        result = {
+            "name": body.name,
+            "wrote": body.hex.lower(),
+            "acked": acked,
+            "read_back": back.hex() if back else None,
+        }
+        store.add_event("settings_raw", result)
+        return result
+
+    @app.post("/watch/dials/query", dependencies=[Depends(auth)])
+    async def post_dials_query() -> dict[str, Any]:
+        """Research, read-only: DIAL_COMMAND type 0 (spec §11.1 "query the list"), raw reply."""
+        try:
+            async with link.exclusive() as session:
+                reply = await session.request(ops.DIAL_COMMAND_SET, b"\x00", ops.DIAL_COMMAND_RET, timeout=3)
+        except TimeoutError:
+            return {"reply": None}
+        except LinkError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        store.add_event("dials_query", {"reply": reply.payload.hex()})
+        return {"reply": reply.payload.hex()}
+
+    @app.post("/settings/probe", dependencies=[Depends(auth)])
+    async def post_settings_probe() -> dict[str, Any]:
+        """Read every setting that has a GET, raw (Tier 0). For learning formats before writing them."""
+        out: dict[str, Any] = {}
+        for name, cmd1 in settings_mod.GROUPS.items():
+            try:
+                raw = await link.read_setting(cmd1)
+            except LinkError as exc:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+            out[name] = raw.hex() if raw is not None else None
+        store.add_event("settings_probe", out)
+        return out
+
+    @app.get("/media", dependencies=[Depends(auth)])
+    async def get_media() -> dict[str, Any]:
+        if media is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "media not configured")
+        return media.public()
+
+    @app.put("/media/settings", dependencies=[Depends(auth)])
+    async def put_media_settings(body: MediaSettings) -> dict[str, Any]:
+        if media is None:
+            raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, "media not configured")
+        media.save(body)
+        if (body.show_now_playing or body.buttons_control_music) and link.connected.is_set():
+            if body.show_now_playing:
+                await media.push_if_changed()
+            else:
+                queue.submit("set_music", {"track": "CMF Studio", "artist": "", "state": 0}, ttl_s=60)
+        return media.public()
+
+    @app.get("/workouts", dependencies=[Depends(auth)])
+    async def get_workouts(limit: int = Query(30, ge=1, le=500)) -> list[dict[str, Any]]:
+        return [
+            {**w, "sport_name": settings_mod.SPORTS.get(w["sport"], f"Sport {w['sport']}")}
+            for w in store.workouts(limit)
+        ]
+
+    @app.get("/workouts/{start_ts}/route", dependencies=[Depends(auth)])
+    async def get_workout_route(start_ts: int) -> dict[str, Any]:
+        w = next((w for w in store.workouts(500) if w["start_ts"] == start_ts), None)
+        if w is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such workout")
+        return {"start_ts": start_ts, "points": store.route(w["start_ts"], w["end_ts"])}
+
+    @app.get("/rules", dependencies=[Depends(auth)])
+    async def get_rules() -> dict[str, Any]:
+        if rules is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "rules engine not running")
+        return rules.describe()
+
+    @app.post("/rules/reload", dependencies=[Depends(auth)])
+    async def reload_rules() -> dict[str, Any]:
+        """Re-read rules.json (the owner edits it by hand; there is deliberately no API to write rules)."""
+        if rules is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "rules engine not running")
+        return rules.reload()
 
     if ui_dir is not None and (ui_dir / "index.html").exists():
         # the built Svelte app: static, no secrets; it gets the token from `cmf ui` (URL fragment)

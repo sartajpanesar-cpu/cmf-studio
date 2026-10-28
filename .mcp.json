@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cmf-watch": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--quiet", "cmf-mcp"]
+    }
+  }
+}

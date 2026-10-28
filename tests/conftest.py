@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 from bleak.exc import BleakBluetoothNotAvailableError, BleakBluetoothNotAvailableReason
 from cmfkit.protocol import opcodes as ops
-from cmfkit.transport.sim import SimWatch
 
 from cmfstudio.ble.keys import MemoryKeyStore
 from cmfstudio.ble.link import LinkState, WatchLink
+from cmfstudio.ble.sim import StudioSim
 from cmfstudio.sync import parsers
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -23,8 +23,8 @@ def frames() -> dict:
     return json.loads((FIXTURES / "phase0_frames.json").read_text())
 
 
-class FlakySim(SimWatch):
-    """SimWatch that can drop the link the way CoreBluetooth reports it."""
+class FlakySim(StudioSim):
+    """The Pro 2 simulator, able to drop the link the way CoreBluetooth reports it."""
 
     def __init__(self) -> None:
         super().__init__()

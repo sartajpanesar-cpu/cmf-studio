@@ -1,0 +1,406 @@
+"""Native (structured) faces: codec on the spec's templates, the scene renderer, and install on the simulator."""
+
+import asyncio
+import base64
+import datetime as dt
+import io
+import struct
+from pathlib import Path
+
+import httpx
+import numpy as np
+import pytest
+
+from cmfstudio.api.app import create_app
+from cmfstudio.core.jobs import JobQueue
+from cmfstudio.render import native_preview
+from cmfstudio.render.native import NativeDial, NativeFormatError, crc32_raw, validate
+from cmfstudio.render.native_face import TEMPLATE_DIR, NativeSpec, build
+from cmfstudio.render.native_service import NativeService
+from cmfstudio.store.db import Store
+
+from .test_render import SYSTEM_TTF, needs_browser
+
+needs_templates = pytest.mark.skipif(
+    not (TEMPLATE_DIR / "362.bin").exists(), reason="spec templates (refs/) not present"
+)
+TEMPLATES = (288, 359, 362, 275, 290, 309)
+
+
+def template(n: int) -> bytes:
+    return (TEMPLATE_DIR / f"{n}.bin").read_bytes()
+
+
+def test_crc32_raw_is_init0_no_xor():
+    assert crc32_raw(b"") == 0
+    assert crc32_raw(b"123456789") == 0x2DFD2D88  # CRC-32/JAMCRC init 0 variant; standard crc32 is 0xCBF43926
+
+
+@needs_templates
+@pytest.mark.parametrize("n", TEMPLATES)
+def test_rebuild_keeps_every_pixel_and_chain(n):
+    dial = NativeDial(template(n))
+    out = dial.build()
+    assert validate(out) == []
+    again = NativeDial(out)
+    assert len(again.tails) == len(dial.tails)
+    for old, new in zip(dial.tails, again.tails, strict=True):
+        for a, b in zip(dial.chain(old), again.chain(new), strict=True):
+            assert (dial.decode(a) == again.decode(b)).all()
+
+
+@needs_templates
+def test_replace_grows_the_pool_and_repoints_tails():
+    dial = NativeDial(template(362))
+    (table, frames) = next((t, f) for t, f in dial.digit_sets() if not t.aod and f[0].w == 84)
+    noisy = np.random.default_rng(1).integers(0, 255, (frames[1].h, frames[1].w, 4), dtype=np.uint8)
+    size = dial.replace(frames[1], noisy)
+    assert size > frames[1].len, "the new '1' is bigger than its old slot"
+    out = NativeDial(dial.build())
+    new_frames = next(f for t, f in out.digit_sets() if t.at == table.at)
+    assert (out.decode(new_frames[1])[..., 3] == noisy[..., 3]).all()
+    assert (out.decode(new_frames[2]) == NativeDial(template(362)).decode(frames[2])).all(), "neighbours intact"
+    with pytest.raises(NativeFormatError):
+        dial.replace(frames[0], noisy[:10])
+
+
+def test_validate_catches_broken_files():
+    assert validate(b"\0" * 10) == ["file too small"]
+    if not (TEMPLATE_DIR / "362.bin").exists():
+        return
+    data = bytearray(NativeDial(template(362)).build())
+    bad_footer = data[:-1] + b"\x99"
+    assert "footer differs from header" in validate(bytes(bad_footer))
+    overrun = bytearray(data)
+    struct.pack_into("<H", overrun, 36 + 3 + 1, 0xFFF0)  # 0x21 screen claims more than the scene holds
+    assert any("overruns" in p for p in validate(bytes(overrun)))
+
+
+@needs_templates
+def test_preview_renderer_draws_the_time_where_the_template_says():
+    dial = NativeDial(template(362))
+    values = native_preview.sample_values(dt.datetime(2026, 10, 9, 10, 12, 9))
+    img = np.asarray(native_preview.render(dial, values))
+    official = np.asarray(__import__("PIL.Image", fromlist=["Image"]).open(TEMPLATE_DIR / "362.png").convert("RGB"))
+    # Steady: hours at x=12, minutes at x=282, y=141, 84×181 glyphs; the official render is at 10:12
+    for box in ((12, 141, 180, 322), (282, 141, 450, 322)):
+        x0, y0, x1, y1 = box
+        ours = img[y0:y1, x0:x1, :3].astype(int)
+        lit = ours.max(axis=2) > 128
+        assert lit.mean() > 0.05 and (official[y0:y1, x0:x1].max(axis=2) > 128)[lit].mean() > 0.95
+
+
+@needs_templates
+def test_digit_colour_and_background_without_a_font():
+    spec = NativeSpec(template=359, digit_color="#ff0000", background="#002040", background_bottom="#000000")
+    result = asyncio.run(build(spec))
+    dial = NativeDial(result.blob)
+    main = [f for t, f in dial.digit_sets() if not t.aod]
+    lit = dial.decode(main[0][8])
+    assert (lit[lit[..., 3] > 200][:, :3] == [255, 0, 0]).all()
+    bg = dial.decode(dial.backgrounds()[0])
+    assert np.abs(bg[0, 233, :3].astype(int) - (0, 32, 64)).max() <= 4  # RGB565 rounding
+    assert tuple(bg[-1, 233, :3]) == (0, 0, 0)
+
+
+@needs_templates
+@needs_browser
+def test_font_glyphs_replace_every_digit_set():
+    font = {"family": "Mine", "source": "local", "path": "data:font/ttf;base64," + _b64(SYSTEM_TTF)}
+    if not Path(SYSTEM_TTF).exists():
+        pytest.skip("system font not present")
+    before = NativeDial(template(362))
+    result = asyncio.run(build(NativeSpec(template=362, font=font, digit_color="#e8c66a")))
+    after = NativeDial(result.blob)
+    for (t0, f0), (_t1, f1) in zip(before.digit_sets(), after.digit_sets(), strict=True):
+        for a, b in zip(f0, f1, strict=True):
+            old, new = before.decode(a)[..., 3], after.decode(b)[..., 3]
+            assert old.shape != new.shape or not (old == new).all(), f"set {t0.base:#x} unchanged"
+    assert result.preview_png.startswith(b"\x89PNG")
+
+
+def _b64(path: str) -> str:
+    return base64.b64encode(Path(path).read_bytes()).decode() if Path(path).exists() else ""
+
+
+# -- install over a stock face on the simulator ------------------------------------------------------------------
+
+
+@pytest.fixture
+async def native_api(paired_link, watch, tmp_path):
+    store = Store(":memory:")
+    queue = JobQueue(store, paired_link, retry_s=0.01)
+    queue.start()
+    native = NativeService(store, paired_link, queue, tmp_path / "faces")
+    app = create_app(paired_link, queue, store, "t", tmp_path, native=native)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", headers={"Authorization": "Bearer t"}
+    ) as c:
+        yield c, watch, store
+    await queue.stop()
+
+
+async def wait_job(c, job_id):
+    for _ in range(200):
+        job = (await c.get(f"/jobs/{job_id}")).json()
+        if job["state"] in ("done", "failed", "expired"):
+            return job
+        await asyncio.sleep(0.02)
+    raise AssertionError("job didn't finish")
+
+
+@needs_templates
+async def test_install_adds_a_face_once_per_layout_until_full(native_api):
+    c, watch, _store = native_api
+    assert [d["id"] for d in (await c.get("/watch/dials")).json()["dials"]][:4] == [275, 352, 276, 280]
+    face = (await c.post("/native/faces", json={"name": "gold", "template": 362, "digit_color": "#e8c66a"})).json()
+    assert (await c.post(f"/native/faces/{face['id']}/install", params={"replace": 275})).status_code == 400
+
+    r = (await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True, "replace": 275})).json()
+    assert r["replaces"] == {"id": 275, "name": "SlopeTime"} and r["installs_as"] == 362
+    assert (await wait_job(c, r["job"]["id"]))["state"] == "done"
+    assert 275 in watch.state.dials and watch.state.dials[-1] == 362, "added, like the real watch"
+    listed = (await c.get("/watch/dials")).json()["dials"][-1]
+    assert listed == {"id": 362, "name": "Steady", "active": True, "kind": "native"}
+
+    again = await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True})
+    assert again.status_code == 409 and "already on the watch" in again.json()["detail"]
+
+    for n, template in enumerate((359, 288)):  # fill the remaining slots (5 → 7)
+        other = (await c.post("/native/faces", json={"name": f"f{n}", "template": template})).json()
+        r = (await c.post(f"/native/faces/{other['id']}/install", params={"confirm": True})).json()
+        if "job" in r:
+            await wait_job(c, r["job"]["id"])
+    assert len(watch.state.dials) == 7
+
+
+@needs_templates
+async def test_refuses_to_replace_the_custom_slot_or_unknown_dials(native_api):
+    c, _watch, _store = native_api
+    face = (await c.post("/native/faces", json={"name": "x", "template": 288})).json()
+    for bad in (0xFFFFFFFF, 999):
+        r = await c.post(f"/native/faces/{face['id']}/install", params={"confirm": True, "replace": bad})
+        assert r.status_code == 409
+
+
+@needs_templates
+async def test_native_preview_endpoint(native_api):
+    c, *_ = native_api
+    r = (await c.post("/native/preview", json={"template": 359, "digit_color": "#00ff88"})).json()
+    assert r["template"] == 359 and base64.b64decode(r["preview_png"]).startswith(b"\x89PNG")
+    assert [t["id"] for t in (await c.get("/native/templates")).json()] == [362, 359, 288]
+
+
+@needs_templates
+def test_hiding_extras_blanks_their_images_only():
+    dial = NativeDial(template(359))
+    result = asyncio.run(build(NativeSpec(template=359, show_date=False, show_data=False)))
+    out = NativeDial(result.blob)
+    from cmfstudio.render.native_face import widgets
+
+    for (cat, imgs), (_cat2, new_imgs) in zip(widgets(dial), widgets(out), strict=True):
+        alpha_max = max(int(out.decode(out.assets[o])[..., 3].max()) for o in new_imgs)
+        if cat in ("date", "data"):
+            assert alpha_max == 0 or all(dial.assets[o].cf == 4 for o in imgs), f"{cat} widget still visible"
+        elif cat == "time":
+            before = max(int(dial.decode(dial.assets[o])[..., 3].max()) for o in imgs)
+            assert alpha_max == before, "time widgets keep their pixels (AM/PM is blank in this template)"
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [359, 362, 288])
+def test_time_row_is_centred_on_both_screens(n):
+    from cmfstudio.render.native_face import _center_time, _hide
+
+    dial = NativeDial(template(n))
+    _center_time(dial)
+    _hide(dial, {"date", "data"})  # so every lit pixel is the time row
+    out = NativeDial(dial.build())
+    values = native_preview.sample_values(dt.datetime(2026, 1, 1, 20, 58))  # wide digits: ink ≈ the digit slots
+    for aod in (False, True):
+        img = np.asarray(native_preview.render(out, values, aod))[..., :3].astype(int)
+        background = img[233, 2]  # a pixel left of the clock
+        xs = np.argwhere(np.abs(img - background).max(axis=2) > 60)[:, 1]
+        if len(xs):
+            assert abs((xs.min() + xs.max()) / 2 - 233) <= 3, (n, aod, int(xs.min()), int(xs.max()))
+
+
+def _time_row(img: np.ndarray) -> tuple[int, int, int]:
+    """Lit columns of a rendered time row: (first, last, widest gap inside) — the gap being hours | minutes."""
+    lit = np.flatnonzero((np.asarray(img)[..., :3].astype(int).max(axis=2) > 60).any(axis=0))
+    gaps = np.diff(lit) - 1
+    return int(lit.min()), int(lit.max()), int(gaps.max())
+
+
+@needs_templates
+@needs_browser
+@pytest.mark.parametrize("n", [359, 362, 288])
+def test_a_fonts_time_keeps_the_layouts_gap_and_its_own_spacing(n):
+    """The watch advances by image width: a narrow font in the template's wide cells read "0 4  5 0" (2026-10-28).
+    Cells now fit the font; hours and minutes stay the template's ink-to-ink distance apart, still centred."""
+    if not Path(SYSTEM_TTF).exists():
+        pytest.skip("system font not present")
+    from cmfstudio.render.native_face import _hide
+
+    font = {"family": "Mine", "source": "local", "path": "data:font/ttf;base64," + _b64(SYSTEM_TTF)}
+    values = native_preview.sample_values(dt.datetime(2026, 1, 1, 16, 50), hour12=True)  # "04 50"
+    stock = NativeDial(template(n))
+    _hide(stock, {"date", "data"})
+    stock_render = native_preview.render(NativeDial(stock.build()), values, transparent=True)
+    spec = NativeSpec(template=n, font=font, digit_color="#ffffff", show_date=False, show_data=False)
+    mine = NativeDial(asyncio.run(build(spec)).blob)
+    *_ends, stock_gap = _time_row(stock_render)
+    first, last, gap = _time_row(native_preview.render(mine, values, transparent=True))
+    assert abs(gap - stock_gap) <= 4, (n, gap, stock_gap)
+    assert abs((first + last) / 2 - 233) <= 3, (n, first, last)
+
+
+def test_preview_hours_follow_the_watchs_12h_setting():
+    at = dt.datetime(2026, 1, 1, 16, 5)
+    assert native_preview.sample_values(at)[0x01] == 16
+    v = native_preview.sample_values(at, hour12=True)
+    assert (v[0x01], v[0x04], v[0x07]) == (4, 16, 16), "only 0x01 follows the setting"
+
+
+async def test_native_service_reads_the_time_format_once(paired_link, watch, tmp_path):
+    from cmfstudio.core.settings import TIME_FORMAT_KEY
+
+    store = Store(":memory:")
+    queue = JobQueue(store, paired_link, retry_s=0.01)
+    queue.start()
+    try:
+        native = NativeService(store, paired_link, queue, tmp_path / "faces")
+        assert await native.hour12() is True  # the simulator answers like the owner's watch: 12-hour
+        assert store.get_kv(TIME_FORMAT_KEY) == "12h"
+        store.set_kv(TIME_FORMAT_KEY, "24h")
+        assert await native.hour12() is False, "cached for 10 minutes, not re-read every preview"
+    finally:
+        await queue.stop()
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [362, 288])
+def test_add_background_to_layouts_without_one(n):
+    from cmfstudio.render.native import add_background
+
+    before = NativeDial(template(n))
+    out = add_background(template(n))
+    after = NativeDial(out)
+    assert validate(out) == [] and len(after.backgrounds()) == 1 and len(after.tails) == len(before.tails) + 1
+    with pytest.raises(NativeFormatError):
+        add_background(out)  # only once
+    # a picture background, end to end, survives the pool rebuild
+    from PIL import Image as PILImage
+
+    picture = PILImage.new("RGB", (466, 466), (200, 40, 40))
+    result = asyncio.run(build(NativeSpec(template=n, digit_color="#ffffff"), background_image=picture))
+    final = NativeDial(result.blob)
+    bg = final.decode(final.backgrounds()[0])
+    assert np.abs(bg[233, 233, :3].astype(int) - (200, 40, 40)).max() <= 12
+    img = np.asarray(native_preview.render(final, native_preview.sample_values()))
+    assert np.abs(img[233, 6, :3].astype(int) - (200, 40, 40)).max() <= 12, "preview draws the new background"
+
+
+@needs_templates
+@pytest.mark.parametrize("n", [288, 362])
+def test_chosen_colour_beats_the_watch_accent_tint(n):
+    """Type's time showed in the watch's accent red despite gold pixels: tintable widgets must lose the flag."""
+    before = NativeDial(template(n))
+    assert any(before.b[t.at - 0x12 + 11] == 4 for t in before.tails if not t.aod)
+    out = NativeDial(asyncio.run(build(NativeSpec(template=n, digit_color="#e8c66a"))).blob)
+    flagged = [t for t in out.tails if not t.aod and out.b[t.at - 0x15] == 0x01 and out.b[t.at - 0x12 + 11] == 4]
+    assert flagged == []
+    kept = NativeDial(asyncio.run(build(NativeSpec(template=n))).blob)  # template colour: the watch's accent stays
+    assert any(kept.b[t.at - 0x12 + 11] == 4 for t in kept.tails if not t.aod)
+
+
+# -- Studio designs with a font clock ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def studio_api(paired_link, watch, tmp_path):
+    from cmfstudio.render.service import FaceService
+
+    store = Store(":memory:")
+    queue = JobQueue(store, paired_link, retry_s=0.01)
+    queue.start()
+    faces = FaceService(store, paired_link, queue, tmp_path / "faces")
+    native = NativeService(store, paired_link, queue, tmp_path / "faces", faces)
+    faces.native = native
+    app = create_app(paired_link, queue, store, "t", tmp_path, faces=faces, native=native)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", headers={"Authorization": "Bearer t"}
+    ) as c:
+        yield c, watch, faces
+    await queue.stop()
+
+
+DESIGN = {
+    "name": "red-disc",
+    "layers": [{"type": "circle", "cx": 233, "cy": 233, "r": 180, "fill": "#cc2222", "stroke": None}],
+    "nativeClock": {"template": 288, "digit_color": "#ffffff"},
+}
+
+
+@needs_templates
+@needs_browser
+async def test_design_with_font_clock_previews_and_installs_as_native(studio_api):
+    c, watch, faces = studio_api
+    overlay = (await c.post("/faces/native-clock", json=DESIGN)).json()
+    from PIL import Image as PILImage
+
+    img = np.asarray(PILImage.open(io.BytesIO(base64.b64decode(overlay["overlay_png"]))).convert("RGBA"))
+    assert img[..., 3].min() == 0 and img[..., 3].max() == 255, "transparent except the clock"
+    full = (await c.post("/faces/native-clock", params={"full": True}, json=DESIGN)).json()
+    face_img = np.asarray(PILImage.open(io.BytesIO(base64.b64decode(full["preview_png"]))).convert("RGB"))
+    assert tuple(face_img[233, 60]) != (0, 0, 0), "the design is the background"
+
+    face_id = (await c.post("/faces", json=DESIGN)).json()["id"]
+    r = (await c.post(f"/faces/{face_id}/install", params={"confirm": True})).json()
+    assert r["native"] and r["installs_as"] == 288 and r["job"]["state"] == "done"
+    assert watch.state.dials[-1] == 288 and validate(watch.native[288]) == []
+    again = await c.post(f"/faces/{face_id}/install", params={"confirm": True})
+    assert again.status_code == 409, "the watch won't overwrite the layout"
+    assert await faces.refresh_after_sync() is None, "no auto-refresh for native faces"
+
+
+@needs_templates
+def test_tidy_lines_up_ring_data_widgets_and_returns_labels():
+    from cmfstudio.render.native_face import DATA_ROW_Y, _scan, _tidy
+
+    dial = NativeDial(template(359))
+    labels = _tidy(dial, show_date=True, show_data=True)
+    assert [t for t, _x, _y in labels] == ["REST", "STEPS", "BPM"]
+    main = next(s for s in _scan(dial) if not s["aod"])
+    rows = {dial.position(g["frame"])[1] for g in main["groups"]}
+    assert rows == {DATA_ROW_Y}, "all data groups on one row"
+    widths = [dial.u16(g["frame"] + 4) for g in main["groups"]]
+    assert set(widths) == {100} and {dial.u16(g["frame"] + 8) for g in main["groups"]} == {0}, "wider, no gap"
+    centres = [x for _t, x, _y in labels]
+    assert centres[1] == 233 and centres[0] + centres[2] == 466, "label blocks evenly around the centre"
+    out = NativeDial(dial.build())
+    icon = next(c for g in _scan(out)[0]["groups"] for c in g["children"] if c["tag"] == 0x30 and len(c["frames"]) == 1)
+    assert out.decode(icon["frames"][0])[..., 3].max() == 0, "placeholder dashes blanked"
+    # date row (month / day) centred too
+    dates = [n for n in main["nodes"] if n["tag"] == 0x60 and n["src"] in (0x16, 0x17)]
+    left = min(dial.position(n["st"])[0] for n in dates)
+    right = max(dial.position(n["st"])[0] + 2 * n["w"] for n in dates)
+    assert abs((left + right) / 2 - 233) <= 2
+
+
+@needs_templates
+def test_offset_moves_every_widget_but_not_the_background():
+    from cmfstudio.render.native_face import _scan
+
+    plain = NativeDial(asyncio.run(build(NativeSpec(template=359, show_date=True, show_data=True))).blob)
+    moved = NativeDial(
+        asyncio.run(build(NativeSpec(template=359, show_date=True, show_data=True, offset_x=-30, offset_y=25))).blob
+    )
+    for a, b in zip(_scan(plain), _scan(moved), strict=True):
+        bgs = {x.off for x in plain.backgrounds(a["aod"])}
+        for na, nb in zip(a["nodes"], b["nodes"], strict=True):
+            (xa, ya), (xb, yb) = plain.position(na["st"]), moved.position(nb["st"])
+            assert (xb - xa, yb - ya) == ((0, 0) if na["frames"][0].off in bgs else (-30, 25))
+        for ga, gb in zip(a["groups"], b["groups"], strict=True):
+            (xa, ya), (xb, yb) = plain.position(ga["frame"]), moved.position(gb["frame"])
+            assert (xb - xa, yb - ya) == (-30, 25)

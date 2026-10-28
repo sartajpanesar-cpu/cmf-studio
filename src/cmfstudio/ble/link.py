@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import enum
 import logging
+import struct
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -24,6 +25,7 @@ from bleak.exc import BleakBluetoothNotAvailableError
 from cmfkit.protocol import opcodes as ops
 from cmfkit.protocol import payloads as pl
 from cmfkit.protocol.frame import FrameError, Message
+from cmfkit.protocol.opcodes import Op
 from cmfkit.session import AuthError, Session
 from cmfkit.transport.base import Channel, Transport
 
@@ -50,6 +52,16 @@ async def _wait_any(events: tuple[asyncio.Event, ...], timeout: float) -> None:
 
 
 CUSTOM_DIAL_ID = 0xFFFFFFFF  # the photo dial's id in the dial list (findings 2026-10-25)
+
+# Structured ("native") dial install: REPLACES an existing dial's slot (spec §11.2 / §11.4).
+WF_INIT2_STRUCTURED_REQUEST = Op(0xFFFF, 0x9075)
+WF_INIT2_STRUCTURED_REPLY = Op(0xFFFF, 0xA075)
+STRUCTURED_KIND = 0x02  # spec: "kind = 0x02/0x03" (meaning of 3 unknown)
+
+
+def structured_dial_init(size: int, old_id: int, new_id: int, kind: int = STRUCTURED_KIND) -> bytes:
+    """INIT2 for 9075: kind u8 ‖ old_id u32 LE ‖ new_id u32 LE ‖ file_len u32 LE (spec §11.4)."""
+    return struct.pack("<BIII", kind, old_id, new_id, size)
 
 
 def parse_dial_list(payload: bytes) -> dict[str, Any]:
@@ -101,6 +113,35 @@ class StudioSession(Session):
         if self._raw_hook:
             self._raw_hook(channel, data)
         super()._on_notify(channel, data)
+
+    async def upload_structured_dial(
+        self, blob: bytes, old_id: int, new_id: int, progress: Callable[[int, int], None] | None = None
+    ) -> int:
+        """Replace dial ``old_id`` with a structured dial. Returns the watch's finish byte (1 = activated & saved,
+        0x0a = stored but not activated / rejected)."""
+        init1 = await self.request(ops.WF_INIT1_REQUEST, pl.POLL, ops.WF_INIT1_REPLY, channel=Channel.DATA)
+        if not init1.payload or init1.payload[0] != 1:
+            raise RuntimeError(f"watch refused watchface transfer: {init1.payload.hex()}")
+        chunk_or_finish = self._expect(ops.WF_CHUNK_REQUEST, ops.WF_FINISH_REQUEST)
+        init2 = await self.request(
+            WF_INIT2_STRUCTURED_REQUEST,
+            structured_dial_init(len(blob), old_id, new_id),
+            WF_INIT2_STRUCTURED_REPLY,
+            channel=Channel.DATA,
+        )
+        if not init2.payload or init2.payload[0] != 1:
+            chunk_or_finish.cancel()
+            raise RuntimeError(f"watch rejected the structured dial header: {init2.payload.hex()}")
+        while True:
+            msg = await asyncio.wait_for(chunk_or_finish, self.timeout * 4)
+            if msg.op == ops.WF_FINISH_REQUEST:
+                await self.send(ops.WF_FINISH_ACK, pl.POLL, channel=Channel.DATA)
+                return msg.payload[0] if msg.payload else 0
+            offset, length = pl.chunk_request(msg.payload)
+            chunk_or_finish = self._expect(ops.WF_CHUNK_REQUEST, ops.WF_FINISH_REQUEST)
+            await self.send(ops.WF_CHUNK_WRITE, blob[offset : offset + length], channel=Channel.DATA)
+            if progress:
+                progress(min(offset + length, len(blob)), len(blob))
 
 
 class WatchLink:
@@ -326,6 +367,8 @@ class WatchLink:
         if msg.op == ops.MUSIC_BUTTON:
             event = buttons.decode(msg.payload)
             self._emit("button", name=event.name, raw=event.raw.hex())
+        elif msg.op == ops.FIND_PHONE:  # the wearer asked the watch to find the phone (01 = start, else stop)
+            self._emit("find_phone", start=bool(msg.payload[:1] == b"\x01"))
         elif msg.op == ops.BATTERY and msg.payload:
             self.battery = msg.payload[0]
         elif msg.op == ops.DIAL_COMMAND_RET and len(msg.payload) >= 4:
@@ -368,6 +411,46 @@ class WatchLink:
             except TimeoutError:
                 return False
 
+    async def read_setting(self, cmd1: int, timeout: float = 3.0) -> bytes | None:
+        """GET (cmd2 0002, payload A5) -> the watch's reply on the SET opcode (cmd2 0001), or None if it stays
+        silent (spec §4.4). Read-only."""
+        async with self._op() as s:
+            try:
+                reply = await s.request(Op(cmd1, 0x0002), pl.POLL, Op(cmd1, 0x0001), timeout=timeout)
+            except TimeoutError:
+                return None
+        return reply.payload
+
+    async def write_setting(
+        self, cmd1: int, cmd2: int, payload: bytes, ack_cmd2: int | None, timeout: float = 3.0
+    ) -> bool:
+        """SET; returns whether the ack (``ack_cmd2``) arrived. ``ack_cmd2=None`` sends without waiting."""
+        async with self._op() as s:
+            if ack_cmd2 is None:
+                await s.send(Op(cmd1, cmd2), payload)
+                return True
+            try:
+                await s.request(Op(cmd1, cmd2), payload, Op(cmd1, ack_cmd2), timeout=timeout)
+                return True
+            except TimeoutError:
+                return False
+
+    async def find_watch(self) -> bool:
+        """Make the watch ring/vibrate (FIND_WATCH 01 → ack 005D 0003). Returns whether it acked."""
+        async with self._op() as s:
+            try:
+                await s.request(ops.FIND_WATCH, b"\x01", ops.FIND_WATCH_ACK, timeout=3)
+                return True
+            except TimeoutError:
+                return False
+
+    async def set_weather(self, payload: bytes) -> None:
+        """WEATHER_SET_1 (FFFF:906B); the watch sends no reply (spec §9, Gadgetbridge)."""
+        if len(payload) != 199:
+            raise ValueError(f"weather payload must be 199 bytes, got {len(payload)}")
+        async with self._op() as s:
+            await s.send(ops.WEATHER_SET, payload)
+
     async def set_music(self, track: str, artist: str, state: int = pl.MUSIC_PLAYING) -> None:
         async with self._op() as s:
             await s.set_music(track, artist, state)
@@ -382,6 +465,19 @@ class WatchLink:
         if ok:
             self._mark_custom_active()
         return ok
+
+    async def install_native_face(self, blob: bytes, old_id: int, new_id: int) -> int:
+        """Replace stock dial ``old_id`` with a structured dial saved as ``new_id``. Returns the finish byte."""
+        if self.dials and old_id not in self.dials["ids"]:
+            raise ValueError(f"dial {old_id} isn't on the watch")
+        async with self._op() as s:
+            result = await s.upload_structured_dial(blob, old_id, new_id)
+            await asyncio.sleep(self.settle_s)
+        if result == 1 and self.dials:  # fw 1.0.0.57 appends the new dial; old_id stays (findings 2026-10-26)
+            ids = [*self.dials["ids"], new_id] if new_id not in self.dials["ids"] else list(self.dials["ids"])
+            index = ids.index(new_id)
+            self.dials = {**self.dials, "ids": ids, "total": len(ids), "active_index": index, "active_id": new_id}
+        return result
 
     def _mark_custom_active(self) -> None:
         """A successful photo install activates the custom dial, but the watch only re-reports its dial

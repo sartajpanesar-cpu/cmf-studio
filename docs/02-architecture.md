@@ -21,15 +21,15 @@ The watch accepts **one BLE connection**. So exactly one long-running process �
 ## Modules
 | Module | Responsibility | Depends on |
 |---|---|---|
-| `ble` | Wrap cmfkit `session`; connect/pair/keepalive; expose async methods (`info`, `notify`, `install_face`, `set_widgets`, `fetch_activity`, `listen_buttons`) | cmfkit |
-| `core` | Job queue (asyncio), job states (`queued/running/done/failed/deferred`), scheduler (sync on connect + every N min while connected) | ble, store |
+| `ble` | Wrap cmfkit `session`; connect/keepalive/reconnect; photo and structured face installs, settings GET/SET, weather, find watch, button / find-phone events; `sim.py` = the Pro 2 simulator | cmfkit |
+| `core` | Job queue, scheduler, rules engine, settings (verified read-back writes), weather + glance, Mac music, find phone, Claude client | ble, store |
 | `sync` | Opcodes + parsers for steps/HR/stress/SpO2/resting HR/sleep/workouts. Always store **raw frames first**, parse second, so parsers can be re-run | ble, store |
 | `store` | SQLite schema + migrations; idempotent upserts keyed by (metric, timestamp) | — |
-| `render` | Face specs → HTML → PNG (Playwright) → RGB565 + dithering → face binary | cmfkit watchface |
+| `render` | Photo faces: spec → HTML → PNG (Playwright) → RGB565 + dithering → dial. Native faces (`native*.py`): structured-dial codec, font glyphs, scene preview | cmfkit watchface |
 | `api` | REST + websocket; bearer token stored in Keychain; binds 127.0.0.1 only | core, store, render |
 | `mcp` | Tools below; calls the api, never BLE | api |
 | `cli` | Thin client over api (`cmf status`, `cmf sync`, `cmf face push`, `cmf notify`) | api |
-| `ui` (Phase 4) | Studio + Health dashboard | api |
+| `ui` | Health, Studio (one editor: photo faces with a built-in clock, or native faces with your font), Settings, Watch | api |
 
 ## Data model (as implemented in `store/db.py`, migration 1)
 ```sql
@@ -45,8 +45,11 @@ events(id, ts, kind, data_json)                             -- buttons, connects
 `daily` is always rebuildable from `samples`; `samples` from `raw_frames`.
 
 ## MCP tool surface (least privilege)
-Allowed: `watch_status`, `sync_now`, `query_health(metric, start, end, agg)`, `notify(title, body)`, `render_face(spec)` (preview only), `install_face(face_id)` (requires confirm flag), `set_widgets(layout)` (requires confirm flag), `list_faces`.
-**Not exposed, ever:** AT shell, firmware tools, pairing/reset, raw frame send.
+Allowed (as built, `mcp/server.py`; rationale in `docs/07-threat-model.md` §3.5): `watch_status`, `sync_now`,
+`query_health(metric, start, end, agg)` (aggregates only), `notify(title, body)`, `render_face(spec)` (preview only),
+`list_faces`, `install_face(face_id, confirm)`, `get_watch_settings`, `set_alarm` / `remove_alarm` (one alarm at a
+time), `set_goals`, `set_do_not_disturb`, `find_watch`. (`set_widgets` was dropped with the widget editor.)
+**Not exposed, ever:** AT shell, firmware tools, pairing/reset, raw frame send, raw settings bytes, rules.
 
 ## Connection lifecycle (Mac reality)
 - Mac sleeps/closes → connection drops. On wake, watchd reconnects, runs backlog, syncs.

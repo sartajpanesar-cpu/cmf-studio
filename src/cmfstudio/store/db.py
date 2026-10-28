@@ -49,6 +49,22 @@ MIGRATIONS: list[str] = [
     CREATE UNIQUE INDEX faces_name ON faces(name);
     CREATE TABLE kv(key TEXT PRIMARY KEY, value TEXT NOT NULL);
     """,
+    # 3: native (structured) faces, and which dial id each one is installed as
+    """
+    CREATE TABLE native_faces(
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, spec_json TEXT NOT NULL, updated_at REAL,
+        last_installed_at REAL, dial_id INTEGER, preview_png BLOB);
+    """,
+    # 4: workouts and their GPS routes (parsed from raw frames; layout recorded per workout). Replaces the
+    # placeholder workouts table from 1, which nothing ever wrote to.
+    """
+    DROP TABLE workouts;
+    CREATE TABLE workouts(
+        start_ts INTEGER PRIMARY KEY, end_ts INTEGER NOT NULL, duration_s INTEGER NOT NULL, sport INTEGER NOT NULL,
+        hr_avg INTEGER, kcal INTEGER, steps INTEGER, distance_m INTEGER, pace_avg_s_km INTEGER, has_gps INTEGER,
+        layout TEXT, extra_json TEXT, source_frame_id INTEGER);
+    CREATE TABLE gps_points(ts INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL);
+    """,
 ]
 
 OPEN_JOB_STATES = ("queued", "running", "deferred")
@@ -161,6 +177,48 @@ class Store:
             raise
         return new
 
+    def upsert_workout(self, w: Any, source_frame_id: int | None) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO workouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                w.start_ts,
+                w.end_ts,
+                w.duration_s,
+                w.sport,
+                w.hr_avg,
+                w.kcal,
+                w.steps,
+                w.distance_m,
+                w.pace_avg_s_km,
+                int(w.has_gps),
+                w.layout,
+                json.dumps(w.extra),
+                source_frame_id,
+            ),
+        )
+
+    def add_gps_points(self, points: list[tuple[int, float, float]]) -> None:
+        self.db.executemany("INSERT OR REPLACE INTO gps_points(ts, lat, lon) VALUES (?, ?, ?)", points)
+
+    def workouts(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM workouts ORDER BY start_ts DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["extra"] = json.loads(d.pop("extra_json") or "{}")
+            d["has_gps"] = bool(d["has_gps"])
+            d["route_points"] = self.db.execute(
+                "SELECT count(*) FROM gps_points WHERE ts BETWEEN ? AND ?", (r["start_ts"], r["end_ts"])
+            ).fetchone()[0]
+            out.append(d)
+        return out
+
+    def route(self, start_ts: int, end_ts: int) -> list[list[float]]:
+        rows = self.db.execute(
+            "SELECT ts, lat, lon FROM gps_points WHERE ts BETWEEN ? AND ? ORDER BY ts", (start_ts, end_ts)
+        )
+        return [[r[0], r[1], r[2]] for r in rows]
+
     def upsert_sleep(self, session: Any, source_frame_id: int | None) -> None:
         stages = {
             "totals_s": session.totals_s,
@@ -218,6 +276,33 @@ class Store:
     def faces(self) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT id, name, last_installed_at, last_digest, updated_at FROM faces ORDER BY name")
         return [dict(r) for r in rows]
+
+    def save_native_face(self, name: str, spec_json: str) -> int:
+        self.db.execute(
+            "INSERT INTO native_faces(name, spec_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET spec_json = excluded.spec_json, updated_at = excluded.updated_at",
+            (name, spec_json, time.time()),
+        )
+        return self.db.execute("SELECT id FROM native_faces WHERE name = ?", (name,)).fetchone()["id"]
+
+    def get_native_face(self, face_id: int) -> sqlite3.Row:
+        row = self.db.execute("SELECT * FROM native_faces WHERE id = ?", (face_id,)).fetchone()
+        if row is None:
+            raise KeyError(face_id)
+        return row
+
+    def native_faces(self) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            "SELECT id, name, spec_json, updated_at, last_installed_at, dial_id FROM native_faces ORDER BY name"
+        )
+        return [dict(r) for r in rows]
+
+    def mark_native_installed(self, face_id: int, dial_id: int, png: bytes) -> None:
+        self.db.execute("UPDATE native_faces SET dial_id = NULL WHERE dial_id = ?", (dial_id,))
+        self.db.execute(
+            "UPDATE native_faces SET last_installed_at = ?, dial_id = ?, preview_png = ? WHERE id = ?",
+            (time.time(), dial_id, png, face_id),
+        )
 
     def mark_face_installed(self, face_id: int, digest: str, png: bytes) -> None:
         self.db.execute(

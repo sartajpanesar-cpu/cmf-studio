@@ -6,6 +6,8 @@ macOS CoreBluetooth addresses are per-Mac device UUIDs, not MACs.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
 from collections.abc import Callable
 
@@ -13,6 +15,12 @@ from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from cmfkit.transport.base import Channel, NotifyHandler
 from cmfkit.transport.ble import NAME_PREFIX, NOTIFY_UUIDS, WRITE_UUIDS
+
+log = logging.getLogger(__name__)
+
+DEFAULT_MTU = 23
+LONG_WRITE_MTU = 247  # frame size to use when we fall back to acknowledged (long) writes
+MTU_WAIT_S = 3.0
 
 
 async def scan(timeout: float = 8.0) -> list[tuple[str, str]]:
@@ -26,10 +34,13 @@ class BleTransport:
         self._client: BleakClient | None = None
         self._handler: NotifyHandler | None = None
         self._on_disconnect: Callable[[], None] | None = None
+        self._long_writes = False
 
     @property
     def mtu(self) -> int:
-        return self._client.mtu_size if self._client else 23
+        if not self._client:
+            return DEFAULT_MTU
+        return LONG_WRITE_MTU if self._long_writes else self._client.mtu_size
 
     @property
     def is_connected(self) -> bool:
@@ -71,6 +82,27 @@ class BleTransport:
         for channel, uuid in NOTIFY_UUIDS.items():
             if uuid in available:
                 await self._client.start_notify(uuid, self._callback(channel))
+        await self._settle_mtu()
+
+    async def _settle_mtu(self) -> None:
+        """macOS sometimes reports the default 23-byte MTU for a whole connection (a link it already held, e.g.
+        after waking): too small for an encrypted frame chunk, so every command failed (findings 2026-10-27).
+        Wait for negotiation; if it never comes, fall back to acknowledged writes, which CoreBluetooth sends as
+        ATT long writes and the watch reassembles."""
+        assert self._client is not None
+        self._long_writes = False
+        deadline = asyncio.get_running_loop().time() + MTU_WAIT_S
+        while self._client.mtu_size <= DEFAULT_MTU and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.1)
+        if self._client.mtu_size > DEFAULT_MTU:
+            return
+        props = {
+            ch.value: sorted(self._client.services.get_characteristic(u).properties)
+            for ch, u in WRITE_UUIDS.items()
+            if self._client.services.get_characteristic(u)
+        }
+        self._long_writes = all("write" in p for p in props.values()) and bool(props)
+        log.warning("MTU stuck at %d; write properties %s; long writes %s", DEFAULT_MTU, props, self._long_writes)
 
     def _callback(self, channel: Channel):
         def callback(_char, data: bytearray) -> None:
@@ -91,4 +123,4 @@ class BleTransport:
     async def write(self, channel: Channel, data: bytes) -> None:
         if not self._client:
             raise ConnectionError("not connected")
-        await self._client.write_gatt_char(WRITE_UUIDS[channel], data, response=False)
+        await self._client.write_gatt_char(WRITE_UUIDS[channel], data, response=self._long_writes)
