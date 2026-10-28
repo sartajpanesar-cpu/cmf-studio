@@ -83,7 +83,18 @@
   const layoutOnWatch = $derived(!!fontClock && dials.dials.some((d) => d.id === fontClock.template));
   const watchFull = $derived(dials.known && dials.dials.length >= (dials.max ?? 7));
   get("/watch/dials").then((d) => (dials = d)).catch(() => {});
+  // the overlay shows the time it was drawn at: redraw it at each new minute so the preview stays current
+  let minute = $state(0);
   $effect(() => {
+    let tick: ReturnType<typeof setInterval> | undefined;
+    const align = setTimeout(() => {
+      minute++;
+      tick = setInterval(() => minute++, 60_000);
+    }, 60_000 - (Date.now() % 60_000) + 500);
+    return () => { clearTimeout(align); clearInterval(tick); };
+  });
+  $effect(() => {
+    void minute;
     const clock = JSON.stringify(spec.nativeClock ?? null);
     clearTimeout(overlayTimer);
     if (clock === "null") { overlayPng = null; return; }
