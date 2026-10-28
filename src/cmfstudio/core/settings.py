@@ -48,6 +48,7 @@ DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")  # repetition bitmask, 
 MAX_ALARMS = 10
 ALARM_SIZE = 40
 ENCODING_KEY = "settings_encoding"
+TIME_FORMAT_KEY = "watch_time_format"  # "12h" / "24h", the last one read from the watch (for face previews)
 
 
 class SettingsError(RuntimeError):
@@ -473,7 +474,10 @@ class SettingsService:
     # -- raw ------------------------------------------------------------------------------------------------------
 
     async def read(self, name: str) -> bytes | None:
-        return await self.link.read_setting(GROUPS[name])
+        raw = await self.link.read_setting(GROUPS[name])
+        if name == "time_format" and raw:
+            self.store.set_kv(TIME_FORMAT_KEY, "12h" if raw[0] else "24h")
+        return raw
 
     async def write(self, name: str, payload: bytes) -> bool:
         return await self.link.write_setting(GROUPS[name], SET, payload, ACK)

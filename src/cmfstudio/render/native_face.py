@@ -173,6 +173,7 @@ async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> list[tuple[str, in
     """Font, colour, accent, centring, hidden and tidied widgets — everything but the background. Returns the labels
     to paint under the data widgets."""
     glyphs = await _glyphs(spec.font, spec.weight) if spec.font else None
+    time_sets = {t.base for t in dial.tails if dial.b[t.at - 0x12 + 13] in HOUR_IDS | MINUTE_IDS}
 
     for table, frames in dial.digit_sets():
         colour = None if table.aod else spec.digit_color
@@ -180,12 +181,16 @@ async def _apply_clock(dial: NativeDial, spec: NativeSpec) -> list[tuple[str, in
             continue
         originals = [dial.decode(f) for f in frames]
         tint = _rgb(colour) if colour else _dominant(originals)
-        alphas = fit_digits(glyphs, originals) if glyphs else [o[..., 3] for o in originals]
+        # the time's digits get cells as wide as this font's digits, so they sit as close as the font intends
+        tight = glyphs is not None and table.base in time_sets
+        alphas = fit_digits(glyphs, originals, tight=tight) if glyphs else [o[..., 3] for o in originals]
         for frame, alpha in zip(frames, alphas, strict=True):
-            rgba = np.zeros((frame.h, frame.w, 4), dtype=np.uint8)
+            rgba = np.zeros((*alpha.shape, 4), dtype=np.uint8)
             rgba[..., :3] = tint  # one colour everywhere: straight alpha, and it compresses far better
             rgba[..., 3] = alpha
-            dial.replace(frame, rgba)
+            dial.replace(frame, rgba, resize=tight)
+        if tight:
+            _repack_time(dial, table.base, originals, alphas)
         if colour:  # our colour must win over the watch's accent tint (Type's time showed red, 2026-10-26)
             for body in dial.struct_bodies({f.off for f in frames}):
                 dial.clear_accent(body)
@@ -295,10 +300,12 @@ async def render_digits(font: FontRef, weight: int = 400) -> list[np.ndarray]:
     return out
 
 
-def fit_digits(glyphs: list[np.ndarray], originals: list[np.ndarray]) -> list[np.ndarray]:
+def fit_digits(glyphs: list[np.ndarray], originals: list[np.ndarray], tight: bool = False) -> list[np.ndarray]:
     """Scale the font's digits (one shared scale) into the template's glyph boxes: as tall as the template's
     digits, bottoms aligned, each centred where the template's digit sits, never wider than its own image
-    (some templates give every digit its own width)."""
+    (some templates give every digit its own width). ``tight``: every digit in one cell as wide as the font's
+    widest digit plus a little tracking, instead of the template's cell (the watch advances by image width,
+    so a narrow font in a wide cell came out spaced "0 4  5 0", 2026-10-28)."""
     boxes = [_ink_box(o[..., 3], 40) or (0, 0, o.shape[1], o.shape[0]) for o in originals]
     top = min(b[1] for b in boxes)
     bottom = max(b[3] for b in boxes)
@@ -307,15 +314,47 @@ def fit_digits(glyphs: list[np.ndarray], originals: list[np.ndarray]) -> list[np
         [(bottom - top) / tallest]
         + [max(b[2] - b[0], o.shape[1] * 0.9) / g.shape[1] for g, o, b in zip(glyphs, originals, boxes, strict=True)]
     )
+    sizes = [(max(1, round(g.shape[1] * scale)), max(1, round(g.shape[0] * scale))) for g in glyphs]
+    cell = 0
+    if tight:  # never wider than the template's cell: a wide font keeps the template's spacing
+        cell = min(
+            max(gw for gw, _gh in sizes) + max(2, round(TRACKING * (bottom - top))), max(o.shape[1] for o in originals)
+        )
     out = []
-    for g, o, b in zip(glyphs, originals, boxes, strict=True):
+    for g, o, b, (gw, gh) in zip(glyphs, originals, boxes, sizes, strict=True):
         h, w = o.shape[:2]
-        gw, gh = max(1, round(g.shape[1] * scale)), max(1, round(g.shape[0] * scale))
         small = np.asarray(Image.fromarray(g).resize((gw, gh), Image.Resampling.LANCZOS))
-        canvas = np.zeros((h, w), dtype=np.uint8)
-        _paste(canvas, small, int(round((b[0] + b[2]) / 2 - gw / 2)), bottom - gh)
+        canvas = np.zeros((h, cell or w), dtype=np.uint8)
+        x = (cell - gw) // 2 if tight else int(round((b[0] + b[2]) / 2 - gw / 2))
+        _paste(canvas, small, x, bottom - gh)
         out.append(canvas)
     return out
+
+
+def _repack_time(dial: NativeDial, base: int, originals: list[np.ndarray], alphas: list[np.ndarray]) -> None:
+    """After the time's cells changed width: put hours and minutes back the template's visible distance apart (ink
+    to ink), around the same midpoint — on each screen (normal, AOD) where both use this digit set."""
+
+    def ink(alpha: np.ndarray) -> int:
+        box = _ink_box(alpha, 40)
+        return box[2] - box[0] if box else alpha.shape[1]
+
+    w0, w1 = max(o.shape[1] for o in originals), alphas[0].shape[1]
+    margin0 = w0 - max(ink(o[..., 3]) for o in originals)  # empty space a template cell adds around its digit
+    margin1 = w1 - max(ink(a) for a in alphas)
+    for aod in (False, True):
+        nodes = [t.at - 0x12 for t in dial.tails if t.base == base and t.aod == aod]
+        hours = [st for st in nodes if dial.b[st + 13] in HOUR_IDS]
+        minutes = [st for st in nodes if dial.b[st + 13] in MINUTE_IDS]
+        if len(hours) != 1 or len(minutes) != 1:
+            continue
+        (hx, hy), (mx, my) = dial.position(hours[0]), dial.position(minutes[0])
+        if mx <= hx or abs(my - hy) > 12:
+            continue
+        gap = max(0, mx - (hx + 2 * w0) + margin0 - margin1)
+        left = round((hx + mx + 2 * w0) / 2 - (4 * w1 + gap) / 2)
+        dial.move(hours[0], left, hy)
+        dial.move(minutes[0], left + 2 * w1 + gap, my)
 
 
 def _accent_to_colour(dial: NativeDial, tint: tuple[int, int, int]) -> None:
@@ -330,7 +369,7 @@ def _accent_to_colour(dial: NativeDial, tint: tuple[int, int, int]) -> None:
             if a.cf in (5, 13, 24):
                 rgba = dial.decode(a).copy()
                 rgba[..., :3] = tint
-                dial.replace(a, rgba)
+                dial.replace(a, rgba, resize=dial.size(a) != (a.w, a.h))  # time digits may be refitted
         dial.clear_accent(body)
 
 
@@ -388,6 +427,7 @@ def widgets(dial: NativeDial) -> list[tuple[str, set[int]]]:
     return out
 
 
+TRACKING = 0.07  # space between the time's digits, as a share of their height
 HOUR_IDS = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
 MINUTE_IDS = {0x0B, 0x0C, 0x0D}
 
@@ -423,7 +463,7 @@ def _center_time(dial: NativeDial, width: int = SIZE) -> None:
                             "src": b[st + 13],
                             "conds": conds,
                             "digits": digits,
-                            "w": max(f.w for f in frames),
+                            "w": max(dial.size(f)[0] for f in frames),
                             "h": frames[0].h,
                         }
                     )
@@ -505,7 +545,7 @@ def _scan(dial: NativeDial) -> list[dict]:
             "src": b[st + 13],
             "conds": conds,
             "frames": frames,
-            "w": max(f.w for f in frames),
+            "w": max(dial.size(f)[0] for f in frames),
             "h": frames[0].h,
         }
 

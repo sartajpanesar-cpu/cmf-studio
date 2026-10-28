@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
 from ..ble.link import CUSTOM_DIAL_ID, WatchLink
 from ..core.jobs import JobQueue
+from ..core.settings import GROUPS, TIME_FORMAT_KEY
 from ..store.db import Job, Store
 from . import native_face, native_preview
 from .native_face import TEMPLATES, NativeResult, NativeSpec
 
 log = logging.getLogger(__name__)
+TIME_FORMAT_TTL_S = 600
 
 # Stock dial names, from the protocol spec's Appendix A (refs/CMF-Watch-Pro-2-BLE-Protocol README).
 DIAL_NAMES: dict[int, str] = {
@@ -138,19 +141,35 @@ class NativeService:
         self.queue = queue
         self.faces_dir = faces_dir
         self.photo_faces = photo_faces  # FaceService, for "use a Studio design as the background"
+        self._time_format_read = float("-inf")
         queue.on_done.append(self._job_done)
 
-    def values(self) -> dict[int, int]:
+    async def hour12(self) -> bool:
+        """Whether the watch shows 12-hour time (its hour widgets follow the watch's setting, spec §16): read from
+        the watch at most every 10 minutes, else the last value read."""
+        if self.link.connected.is_set() and time.monotonic() - self._time_format_read > TIME_FORMAT_TTL_S:
+            self._time_format_read = time.monotonic()
+            try:
+                raw = await self.link.read_setting(GROUPS["time_format"], timeout=2.0)
+            except Exception as exc:  # a busy link shouldn't break a preview
+                log.debug("time format: %r", exc)
+                raw = None
+            if raw:
+                self.store.set_kv(TIME_FORMAT_KEY, "12h" if raw[0] else "24h")
+        return self.store.get_kv(TIME_FORMAT_KEY) == "12h"
+
+    def values(self, hour12: bool = False) -> dict[int, int]:
         ctx = self.photo_faces.context() if self.photo_faces else None
         m = ctx.metrics if ctx else {}
         return native_preview.sample_values(
+            hour12=hour12,
             metrics={
                 "steps": m.get("steps"),
                 "kcal": m.get("kcal"),
                 "hr": m.get("hr"),
                 "hr_resting": m.get("hr_resting"),
                 "battery": self.link.battery,
-            }
+            },
         )
 
     async def build(self, spec: NativeSpec) -> NativeResult:
@@ -158,7 +177,7 @@ class NativeService:
         if spec.background_face_id is not None and self.photo_faces is not None:
             rendered = await self.photo_faces.preview(self.photo_faces.spec(spec.background_face_id))
             background = rendered.watch
-        return await native_face.build(spec, background, self.values())
+        return await native_face.build(spec, background, self.values(await self.hour12()))
 
     def save(self, spec: NativeSpec) -> int:
         return self.store.save_native_face(spec.name, spec.model_dump_json())
@@ -249,7 +268,7 @@ class NativeService:
         clock = design.native_clock
         spec = native_face.spec_from_clock(clock, design.name)
         if overlay_only:
-            png, box = await native_face.clock_overlay(spec, self.values())
+            png, box = await native_face.clock_overlay(spec, self.values(await self.hour12()))
             return {
                 "overlay_png": base64.b64encode(png).decode(),
                 "box": box,
@@ -259,7 +278,9 @@ class NativeService:
         if self.photo_faces is None:
             raise LookupError("photo faces aren't available")
         background = (await self.photo_faces.preview(design.model_copy(update={"native_clock": None}))).watch
-        result = await native_face.build(spec.model_copy(update={"background": None}), background, self.values())
+        result = await native_face.build(
+            spec.model_copy(update={"background": None}), background, self.values(await self.hour12())
+        )
         return preview_payload(result)
 
     def _job_done(self, job: Job) -> None:

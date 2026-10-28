@@ -114,7 +114,8 @@ def test_font_glyphs_replace_every_digit_set():
     after = NativeDial(result.blob)
     for (t0, f0), (_t1, f1) in zip(before.digit_sets(), after.digit_sets(), strict=True):
         for a, b in zip(f0, f1, strict=True):
-            assert not (before.decode(a)[..., 3] == after.decode(b)[..., 3]).all(), f"set {t0.base:#x} unchanged"
+            old, new = before.decode(a)[..., 3], after.decode(b)[..., 3]
+            assert old.shape != new.shape or not (old == new).all(), f"set {t0.base:#x} unchanged"
     assert result.preview_png.startswith(b"\x89PNG")
 
 
@@ -222,6 +223,59 @@ def test_time_row_is_centred_on_both_screens(n):
         xs = np.argwhere(np.abs(img - background).max(axis=2) > 60)[:, 1]
         if len(xs):
             assert abs((xs.min() + xs.max()) / 2 - 233) <= 3, (n, aod, int(xs.min()), int(xs.max()))
+
+
+def _time_row(img: np.ndarray) -> tuple[int, int, int]:
+    """Lit columns of a rendered time row: (first, last, widest gap inside) — the gap being hours | minutes."""
+    lit = np.flatnonzero((np.asarray(img)[..., :3].astype(int).max(axis=2) > 60).any(axis=0))
+    gaps = np.diff(lit) - 1
+    return int(lit.min()), int(lit.max()), int(gaps.max())
+
+
+@needs_templates
+@needs_browser
+@pytest.mark.parametrize("n", [359, 362, 288])
+def test_a_fonts_time_keeps_the_layouts_gap_and_its_own_spacing(n):
+    """The watch advances by image width: a narrow font in the template's wide cells read "0 4  5 0" (2026-10-28).
+    Cells now fit the font; hours and minutes stay the template's ink-to-ink distance apart, still centred."""
+    if not Path(SYSTEM_TTF).exists():
+        pytest.skip("system font not present")
+    from cmfstudio.render.native_face import _hide
+
+    font = {"family": "Mine", "source": "local", "path": "data:font/ttf;base64," + _b64(SYSTEM_TTF)}
+    values = native_preview.sample_values(dt.datetime(2026, 1, 1, 16, 50), hour12=True)  # "04 50"
+    stock = NativeDial(template(n))
+    _hide(stock, {"date", "data"})
+    stock_render = native_preview.render(NativeDial(stock.build()), values, transparent=True)
+    spec = NativeSpec(template=n, font=font, digit_color="#ffffff", show_date=False, show_data=False)
+    mine = NativeDial(asyncio.run(build(spec)).blob)
+    *_ends, stock_gap = _time_row(stock_render)
+    first, last, gap = _time_row(native_preview.render(mine, values, transparent=True))
+    assert abs(gap - stock_gap) <= 4, (n, gap, stock_gap)
+    assert abs((first + last) / 2 - 233) <= 3, (n, first, last)
+
+
+def test_preview_hours_follow_the_watchs_12h_setting():
+    at = dt.datetime(2026, 1, 1, 16, 5)
+    assert native_preview.sample_values(at)[0x01] == 16
+    v = native_preview.sample_values(at, hour12=True)
+    assert (v[0x01], v[0x04], v[0x07]) == (4, 16, 16), "only 0x01 follows the setting"
+
+
+async def test_native_service_reads_the_time_format_once(paired_link, watch, tmp_path):
+    from cmfstudio.core.settings import TIME_FORMAT_KEY
+
+    store = Store(":memory:")
+    queue = JobQueue(store, paired_link, retry_s=0.01)
+    queue.start()
+    try:
+        native = NativeService(store, paired_link, queue, tmp_path / "faces")
+        assert await native.hour12() is True  # the simulator answers like the owner's watch: 12-hour
+        assert store.get_kv(TIME_FORMAT_KEY) == "12h"
+        store.set_kv(TIME_FORMAT_KEY, "24h")
+        assert await native.hour12() is False, "cached for 10 minutes, not re-read every preview"
+    finally:
+        await queue.stop()
 
 
 @needs_templates

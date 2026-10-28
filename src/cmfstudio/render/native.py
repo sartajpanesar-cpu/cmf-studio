@@ -179,10 +179,14 @@ class NativeDial:
 
     # -- pixels ---------------------------------------------------------------------------------------------------
 
+    def size(self, asset: Asset) -> tuple[int, int]:
+        """(w, h) now — after a resizing replace, the new size."""
+        return self._dims.get(asset.off, (asset.w, asset.h))
+
     def decode(self, asset: Asset) -> np.ndarray:
         """RGBA uint8 (h, w, 4) — the replacement if one was set, else the template's image."""
         block = self._new.get(asset.off) or self.b[asset.off + 8 : asset.off + 8 + asset.len]
-        w, h = self._dims.get(asset.off, (asset.w, asset.h))
+        w, h = self.size(asset)
         raw = lz4.block.decompress(block, uncompressed_size=decoded_size(asset.cf, w, h))
         return raster_to_rgba(raw, asset.cf, w, h)
 

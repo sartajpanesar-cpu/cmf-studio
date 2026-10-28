@@ -21,13 +21,16 @@ from .spec import SIZE
 SCREEN = {False: 0x21, True: 0x22}
 
 
-def sample_values(now: dt.datetime | None = None, metrics: dict[str, Any] | None = None) -> dict[int, int]:
-    """Data-source ids (§16) → values: the time/date now, plus today's health numbers when known."""
+def sample_values(
+    now: dt.datetime | None = None, metrics: dict[str, Any] | None = None, hour12: bool = False
+) -> dict[int, int]:
+    """Data-source ids (§16) → values: the time/date now, plus today's health numbers when known. ``hour12``: the
+    watch is set to 12-hour time, which hour id 0x01 follows (0x04 / 0x07 stay 24-hour)."""
     now = now or dt.datetime.now()
     m = metrics or {}
     h12 = now.hour % 12 or 12
     v = {
-        0x01: now.hour,
+        0x01: h12 if hour12 else now.hour,
         0x04: now.hour,
         0x07: now.hour,
         0x02: h12 // 10,
