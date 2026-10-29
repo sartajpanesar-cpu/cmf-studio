@@ -39,7 +39,7 @@ async def _info(link: WatchLink, _a: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _set_music(link: WatchLink, a: dict[str, Any]) -> None:
-    await link.set_music(a["track"], a.get("artist", ""), a.get("state", 2))
+    await link.set_music(a["track"], a.get("artist", ""), a.get("state", 2), a.get("volume", 8))
 
 
 async def _install_face(link: WatchLink, a: dict[str, Any]) -> dict[str, Any]:

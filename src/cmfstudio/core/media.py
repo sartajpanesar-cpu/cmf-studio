@@ -1,6 +1,10 @@
 """The Mac's music on the watch: the watch's music card shows what Spotify / Apple Music is playing, and the watch's
 music buttons control them (play/pause, next, previous) and the Mac's volume.
 
+Volume: the watch draws its own 0-16 bar from the level the host last sent and moves it one step per press, expecting
+the host to apply the step and echo the new level (findings 2026-10-25). So each press moves the Mac one watch step
+(100/16 %) and the Mac's level goes back to the watch in MUSIC_INFO_SET.
+
 Players are asked over AppleScript (``osascript``), only when their app is already running (``pgrep``), so nothing
 is launched; macOS asks once whether watchd may control them (Automation permission). Off by default; settings in kv
 ``media_settings``. Button presses still reach the rules engine too — if rules.json binds the same buttons, both run.
@@ -22,7 +26,7 @@ log = logging.getLogger(__name__)
 SETTINGS_KEY = "media_settings"
 POLL_S = 3.0
 PLAYERS = ("Spotify", "Music")
-VOLUME_STEP = 6
+VOLUME_MAX = 16  # the watch's scale
 
 # (script) -> stdout. Injected in tests.
 Runner = Callable[[list[str]], Awaitable[tuple[int, str]]]
@@ -34,6 +38,7 @@ tell application "{app}"
     return (player state as text) & linefeed & (name of t) & linefeed & (artist of t)
 end tell
 """
+_GET_VOLUME = "output volume of (get volume settings)"
 _COMMANDS = {"play_pause": "playpause", "next": "next track", "prev": "previous track"}
 
 
@@ -54,7 +59,10 @@ class MediaService:
         self.queue = queue
         self.run = run
         self.now: dict[str, Any] | None = None  # last seen {app, state, track, artist}
-        self._sent: tuple[str, str, int] | None = None
+        self._sent: tuple[str, str, int, int] | None = None
+        self._title: tuple[str, str, int] = ("CMF Studio", "", 0)  # what the music card shows now
+        self.volume = VOLUME_MAX // 2  # last level sent, on the watch's 0-16 scale
+        self._volume_lock = asyncio.Lock()  # held keys repeat ~4-8/s; apply presses one at a time
         self._tasks: set[asyncio.Task] = set()
 
     def settings(self) -> MediaSettings:
@@ -91,16 +99,37 @@ class MediaService:
         self.now = best
         return best
 
+    async def mac_volume(self) -> int | None:
+        """The Mac's output volume on the watch's 0-16 scale, or None (e.g. an output macOS can't set)."""
+        code, out = await self.run(["osascript", "-e", _GET_VOLUME])
+        if code or not out.isdigit():
+            return None
+        return round(int(out) * VOLUME_MAX / 100)
+
     async def push_if_changed(self) -> bool:
         info = await self.poll()
         if info is None:
-            key = ("CMF Studio", "", 0)
+            self._title = ("CMF Studio", "", 0)
         else:
-            key = (info["track"][:64] or info["app"], info["artist"][:64], 2 if info["state"] == "playing" else 1)
+            self._title = (
+                info["track"][:64] or info["app"],
+                info["artist"][:64],
+                2 if info["state"] == "playing" else 1,
+            )
+        level = await self.mac_volume()
+        if level is not None:
+            self.volume = level
+        return self._push()
+
+    def _push(self, ttl_s: float = 30) -> bool:
+        key = (*self._title, self.volume)
         if key == self._sent:
             return False
         self._sent = key
-        self.queue.submit("set_music", {"track": key[0], "artist": key[1], "state": key[2]}, ttl_s=30)
+        track, artist, state = self._title
+        self.queue.submit(
+            "set_music", {"track": track, "artist": artist, "state": state, "volume": self.volume}, ttl_s=ttl_s
+        )
         return True
 
     # -- buttons --------------------------------------------------------------------------------------------------
@@ -114,19 +143,35 @@ class MediaService:
         ):
             self._sent = None
             if not s.show_now_playing:  # the watch only reports buttons after some music info (findings 2026-10-25)
-                self.queue.submit("set_music", {"track": "CMF Studio", "artist": "", "state": 0}, ttl_s=60)
+                self._push(ttl_s=60)
             return
         if event["kind"] != "button" or not s.buttons_control_music:
             return
         task = asyncio.ensure_future(self.command(event["name"]))
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._done)
+
+    def _done(self, task: asyncio.Task) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and task.exception():
+            log.warning("music button failed: %r", task.exception())
 
     async def command(self, button: str) -> str | None:
         if button in ("vol_up", "vol_down"):
-            delta = VOLUME_STEP if button == "vol_up" else -VOLUME_STEP
-            script = f"set volume output volume ((output volume of (get volume settings)) + {delta})"
-            await self.run(["osascript", "-e", script])
+            async with self._volume_lock:
+                level = await self.mac_volume()
+                if level is None:
+                    log.warning("volume button: can't read the Mac's output volume")
+                    return None
+                level = max(0, min(VOLUME_MAX, level + (1 if button == "vol_up" else -1)))
+                code, _ = await self.run(
+                    ["osascript", "-e", f"set volume output volume {round(level * 100 / VOLUME_MAX)}"]
+                )
+                if code:
+                    log.warning("volume button: osascript exited %d", code)
+                    return None
+                self.volume = level
+                self._push()  # echo the new level so the watch's bar follows the Mac
             return "volume"
         verb = _COMMANDS.get(button)
         if verb is None:
@@ -134,7 +179,9 @@ class MediaService:
         info = self.now or await self.poll()
         if info is None:
             return None
-        await self.run(["osascript", "-e", f'tell application "{info["app"]}" to {verb}'])
+        code, _ = await self.run(["osascript", "-e", f'tell application "{info["app"]}" to {verb}'])
+        if code:
+            log.warning("music button: osascript exited %d for %s", code, info["app"])
         self._sent = None  # show the new track promptly
         return info["app"]
 

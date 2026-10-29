@@ -451,9 +451,9 @@ class WatchLink:
         async with self._op() as s:
             await s.send(ops.WEATHER_SET, payload)
 
-    async def set_music(self, track: str, artist: str, state: int = pl.MUSIC_PLAYING) -> None:
+    async def set_music(self, track: str, artist: str, state: int = pl.MUSIC_PLAYING, volume: int = 8) -> None:
         async with self._op() as s:
-            await s.set_music(track, artist, state)
+            await s.send(ops.MUSIC_INFO_SET, pl.music_info(track, artist, state, volume))
 
     async def install_photo_face(
         self, blob: bytes, style: int = 0, x: int = 56, y: int = 77, color565: int = 0xFFFF
