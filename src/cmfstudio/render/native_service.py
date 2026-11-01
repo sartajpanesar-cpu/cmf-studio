@@ -18,7 +18,8 @@ from ..core.jobs import JobQueue
 from ..core.settings import GROUPS, TIME_FORMAT_KEY
 from ..store.db import Job, Store
 from . import native_face, native_preview
-from .native_face import TEMPLATES, NativeResult, NativeSpec
+from .native_face import RING_SOURCE, TEMPLATES, LiveRing, NativeResult, NativeSpec
+from .spec import FaceSpec, RingLayer
 
 log = logging.getLogger(__name__)
 TIME_FORMAT_TTL_S = 600
@@ -173,11 +174,21 @@ class NativeService:
         )
 
     async def build(self, spec: NativeSpec) -> NativeResult:
-        background = None
-        if spec.background_face_id is not None and self.photo_faces is not None:
-            rendered = await self.photo_faces.preview(self.photo_faces.spec(spec.background_face_id))
-            background = rendered.watch
-        return await native_face.build(spec, background, self.values(await self.hour12()))
+        if spec.background_face_id is None or self.photo_faces is None:
+            return await native_face.build(spec, None, self.values(await self.hour12()))
+        return await self._build_on(spec, self.photo_faces.spec(spec.background_face_id))
+
+    async def _build_on(self, spec: NativeSpec, design: FaceSpec) -> NativeResult:
+        """``spec`` over ``design`` as its background. A steps ring the watch can draw (layouts with ring slots)
+        leaves the picture, all but its track, and goes to the watch: a baked ring froze at install-day steps
+        (owner, 2026-11-01)."""
+        assert self.photo_faces is not None
+        values = self.values(await self.hour12())
+        design, ring, share = split_ring(design, spec.template, self.photo_faces.context().metrics.get("steps"))
+        if ring is not None:
+            values[RING_SOURCE] = share  # the preview shows what the ring is meant to show
+        background = (await self.photo_faces.preview(design.model_copy(update={"native_clock": None}))).watch
+        return await native_face.build(spec, background, values, ring)
 
     def save(self, spec: NativeSpec) -> int:
         return self.store.save_native_face(spec.name, spec.model_dump_json())
@@ -277,11 +288,7 @@ class NativeService:
             }
         if self.photo_faces is None:
             raise LookupError("photo faces aren't available")
-        background = (await self.photo_faces.preview(design.model_copy(update={"native_clock": None}))).watch
-        result = await native_face.build(
-            spec.model_copy(update={"background": None}), background, self.values(await self.hour12())
-        )
-        return preview_payload(result)
+        return preview_payload(await self._build_on(spec.model_copy(update={"background": None}), design))
 
     def _job_done(self, job: Job) -> None:
         if job.kind != "install_native" or job.state != "done":
@@ -291,6 +298,19 @@ class NativeService:
             job.args["face_id"], job.args["new_id"], png.read_bytes() if png.exists() else b""
         )
         self.store.add_event("face", {"native": job.args["face_id"], "dial": job.args["new_id"]})
+
+
+def split_ring(design: FaceSpec, template: int, steps: float | None) -> tuple[FaceSpec, LiveRing | None, int]:
+    """(design without its steps ring's arc, that ring for the watch, today's percent) — or the design unchanged
+    when it has no steps ring or the layout can't draw one."""
+    for i, layer in enumerate(design.layers):
+        if isinstance(layer, RingLayer) and layer.bind == "metric:steps" and native_face.has_ring_slots(template):
+            layers = list(design.layers)
+            layers[i] = layer.model_copy(update={"bind": "none"})  # unbound: just the track
+            ring = LiveRing(layer.cx, layer.cy, layer.r, layer.width, layer.color, layer.start_deg)
+            share = round(min(100.0, 100 * (steps or 0) / layer.max))
+            return design.model_copy(update={"layers": layers}), ring, share
+    return design, None, 0
 
 
 def preview_payload(result: NativeResult) -> dict[str, Any]:

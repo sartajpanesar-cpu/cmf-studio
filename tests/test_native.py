@@ -404,3 +404,79 @@ def test_offset_moves_every_widget_but_not_the_background():
         for ga, gb in zip(a["groups"], b["groups"], strict=True):
             (xa, ya), (xb, yb) = plain.position(ga["frame"]), moved.position(gb["frame"])
             assert (xb - xa, yb - ya) == (-30, 25)
+
+
+# -- live ring: a design's steps ring drawn by the watch -------------------------------------------------------------
+
+
+@needs_templates
+def test_ring_data_has_twelve_ring_slots_banded_by_one_source():
+    from cmfstudio.render.native_face import has_ring_slots, ring_slots
+
+    shares = [s for _st, _off, s in ring_slots(NativeDial(template(359)))]
+    assert shares == pytest.approx([0, 0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.0])
+    assert has_ring_slots(359) and not has_ring_slots(362) and not has_ring_slots(288)
+
+
+def test_ring_frame_is_the_arc_cropped_with_its_position():
+    from cmfstudio.render.native_face import LiveRing, ring_frame
+
+    ring = LiveRing(233, 233, 230, 7, "#00e7e7")
+    assert ring_frame(ring, 0) is None
+    rgba, x, y = ring_frame(ring, 0.25)  # top → right, clockwise
+    assert x >= 225 and y <= 2 and x + rgba.shape[1] >= 464 and y + rgba.shape[0] >= 229
+    assert tuple(rgba[rgba[..., 3] == 255][0, :3]) == (0, 231, 231)
+    full, x, y = ring_frame(ring, 1.0)
+    assert (x, y) == (0, 0) and full.shape[:2] == (466, 466)
+
+
+@needs_templates
+async def test_live_ring_goes_into_the_slots_and_the_watch_picks_the_frame():
+    from cmfstudio.render.native_face import RING_SOURCE, LiveRing, ring_slots
+
+    ring = LiveRing(233, 233, 230, 7, "#00e7e7")
+    spec = NativeSpec(name="ring", template=359, offset_y=134)  # the clock's offset must not move the ring
+    result = await build(spec, values={RING_SOURCE: 30}, ring=ring)
+    assert validate(result.blob) == []
+    dial = NativeDial(result.blob)
+    slots = ring_slots(dial)
+    assert len(slots) == 12
+    sizes = [dial.assets[off].w * dial.assets[off].h for _st, off, _s in slots]
+    assert sizes[0] == 1 and sizes == sorted(sizes), "=0 is empty; each band's arc is longer"
+    assert dial.position(slots[-1][0]) == (0, 0)
+
+    def cyan(values: dict[int, int]) -> np.ndarray:
+        img = np.asarray(native_preview.render(dial, values).convert("RGB")).astype(int)
+        return (img[..., 1] > 150) & (img[..., 2] > 150) & (img[..., 0] < 80)
+
+    at30 = cyan({RING_SOURCE: 30})
+    assert at30[:233, 233:].any() and not at30[:, :200].any(), "a third of the way round: top-right only"
+    assert cyan({RING_SOURCE: 100})[:, :200].any()
+
+
+@needs_templates
+def test_split_ring_keeps_the_track_and_hands_the_arc_to_the_watch():
+    from cmfstudio.render.native_service import split_ring
+    from cmfstudio.render.spec import FaceSpec
+
+    design = FaceSpec.model_validate(
+        {
+            "name": "d",
+            "layers": [
+                {
+                    "type": "ring",
+                    "bind": "metric:steps",
+                    "max": 5000,
+                    "r": 230,
+                    "width": 7,
+                    "color": "#00e7e7",
+                    "track": "#1a1a1a",
+                }
+            ],
+        }
+    )
+    stripped, ring, share = split_ring(design, 359, 1250)
+    assert ring is not None and (ring.r, ring.color) == (230, "#00e7e7") and share == 25
+    assert stripped.layers[0].bind == "none" and stripped.layers[0].track == "#1a1a1a"
+    same, none, _ = split_ring(design, 362, 1250)
+    assert none is None and same.layers[0].bind == "metric:steps", "no ring slots: the ring stays in the picture"

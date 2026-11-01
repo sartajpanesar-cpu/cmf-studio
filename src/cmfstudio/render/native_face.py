@@ -10,7 +10,8 @@ firmware's own clock logic stay intact:
 - the main-screen background becomes a colour, a top→bottom gradient, or a picture (e.g. a Studio design rendered
   without the firmware clock); layouts without a background image get one added (``native.add_background``); the
   always-on background is left as the template's.
-- the face-picker thumbnail is the preview, scaled down.
+- the face-picker thumbnail is the preview, scaled down;
+- a design's progress ring (``LiveRing``) is drawn into Ring Data's segmented-ring slots, so the watch moves it.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 
 from . import html, native_preview, raster
@@ -99,9 +100,13 @@ def available_templates() -> list[dict]:
 
 
 async def build(
-    spec: NativeSpec, background_image: Image.Image | None = None, values: dict[int, int] | None = None
+    spec: NativeSpec,
+    background_image: Image.Image | None = None,
+    values: dict[int, int] | None = None,
+    ring: LiveRing | None = None,
 ) -> NativeResult:
-    """``background_image`` (466×466) wins over the spec's background colours; ``values`` feed the preview."""
+    """``background_image`` (466×466) wins over the spec's background colours; ``values`` feed the preview;
+    ``ring`` goes into the layout's segmented-ring slots (if it has them; else a warning)."""
     data = template_path(spec.template).read_bytes()
     bg_rgba = _background(spec, background_image)
     plain_black = background_image is None and spec.background == "#000000" and not spec.background_bottom
@@ -110,6 +115,8 @@ async def build(
     dial = NativeDial(data)
     warnings: list[str] = []
     labels = await _apply_clock(dial, spec)
+    if ring is not None and not _live_ring(dial, ring):
+        warnings.append("this layout has no ring slots: the ring stays as drawn in the background")
 
     if bg_rgba is not None:
         if labels:  # labels never change, so they live in the background picture
@@ -648,6 +655,120 @@ def _hide(dial: NativeDial, categories: set[str]) -> None:
         if a.cf == 4:
             rgba[..., 3] = 255  # opaque format: black
         dial.replace(a, rgba)
+
+
+# -- live ring ------------------------------------------------------------------------------------------------------
+
+# Ring Data's segmented ring: 12 single-image nodes on the main screen, each shown for one band of a 0-100 source
+# (=0, 1-9, 10-19 … 90-99, =100). The template's frames are blank (2026-11-01), so a design's ring is drawn into
+# them and the watch picks the frame. Which value drives them is unverified: spec §16 reads 0x24 as battery %,
+# wfweb's parse.ts as goal % (findings 2026-11-01).
+RING_SOURCE = 0x24
+RING_SS = 4  # supersampling for smooth arc edges
+
+
+@dataclass(frozen=True)
+class LiveRing:
+    """A design's progress arc (a RingLayer's geometry), drawn by the watch from RING_SOURCE (percent)."""
+
+    cx: int
+    cy: int
+    r: int
+    width: float
+    color: str
+    start_deg: float = -90
+
+
+def ring_slots(dial: NativeDial) -> list[tuple[int, int, float]]:
+    """(0x01 struct body, image offset, share of the ring to draw) per segmented-ring slot. Each slot draws its
+    band's midpoint, and frames are whole arcs from the start, so slots the watch stacks still read right."""
+    b, tails, out = dial.b, {t.at: t for t in dial.tails}, []
+
+    def node(body: int, n: int) -> None:
+        off, st, imgs, conds = body, None, [], []
+        while off < body + n:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag == 0x01:
+                st, tail = cb, tails.get(cb + 0x12)
+                imgs = dial.chain(tail) if tail else []
+            elif tag == 0x02:
+                conds = [
+                    (
+                        b[cb + 1 + 5 * k],
+                        b[cb + 2 + 5 * k] & 0x7F,
+                        int.from_bytes(b[cb + 3 + 5 * k : cb + 6 + 5 * k], "little", signed=True),
+                    )
+                    for k in range(b[cb])
+                ]
+            off = cb + ln
+        if st is None or len(imgs) != 1 or not conds or any(c[0] != RING_SOURCE for c in conds):
+            return
+        lows = [v for _id, op, v in conds if op in (0x03, 0x05)]
+        highs = [v for _id, op, v in conds if op == 0x04]  # op 0x04 is unknown in the spec; here it's the band's top
+        if highs:
+            share = (max(lows, default=0) + max(highs)) / 200
+        else:
+            share = max(v for _id, op, v in conds) / 100  # "=0" / "=100"
+        out.append((st, imgs[0].off, max(0.0, min(1.0, share))))
+
+    def walk(off: int, end: int) -> None:
+        while off < end:
+            tag, ln = b[off], int.from_bytes(b[off + 1 : off + 3], "little")
+            cb = off + 3
+            if tag in (0x20, 0x21, 0x68):  # main screen only (0x22 = always-on)
+                walk(cb, cb + ln)
+            elif tag in (0x30, 0x60, 0x70, 0x80, 0x81, 0x85):
+                node(cb, ln)
+            off = cb + ln
+
+    walk(36, dial.first_asset)
+    return out
+
+
+@lru_cache(maxsize=8)
+def has_ring_slots(template: int) -> bool:
+    return bool(ring_slots(NativeDial(template_path(template).read_bytes())))
+
+
+def ring_frame(ring: LiveRing, share: float) -> tuple[np.ndarray, int, int] | None:
+    """The arc for ``share`` of the ring, cropped to its ink, and where its top-left goes. None: nothing to draw."""
+    if share <= 0:
+        return None
+    k, w = RING_SS, max(1, round(ring.width * RING_SS))
+    img = Image.new("L", (SIZE * k, SIZE * k), 0)
+    d = ImageDraw.Draw(img)
+    cx, cy, r = ring.cx * k, ring.cy * k, ring.r * k
+    box = (cx - r - w / 2, cy - r - w / 2, cx + r + w / 2, cy + r + w / 2)
+    start, end = ring.start_deg, ring.start_deg + 360 * share
+    d.arc(box, start, end, fill=255, width=w)
+    for deg in (start, end):  # round caps, like the design's stroke-linecap
+        rad = np.deg2rad(deg)
+        x, y = cx + r * np.cos(rad), cy + r * np.sin(rad)
+        d.ellipse((x - w / 2, y - w / 2, x + w / 2, y + w / 2), fill=255)
+    alpha = np.asarray(img.resize((SIZE, SIZE), Image.Resampling.LANCZOS))
+    ink = _ink_box(alpha, 1)
+    if ink is None:
+        return None
+    x0, y0, x1, y1 = ink
+    rgba = np.zeros((y1 - y0, x1 - x0, 4), np.uint8)
+    rgba[..., :3] = _rgb(ring.color)
+    rgba[..., 3] = alpha[y0:y1, x0:x1]
+    return rgba, x0, y0
+
+
+def _live_ring(dial: NativeDial, ring: LiveRing) -> bool:
+    """Draw ``ring`` into the layout's ring slots (after _apply_clock: positions here are absolute)."""
+    slots = ring_slots(dial)
+    for st, off, share in slots:
+        frame = ring_frame(ring, share)
+        if frame is None:
+            dial.replace(dial.assets[off], np.zeros((1, 1, 4), np.uint8), resize=True)
+            continue
+        rgba, x, y = frame
+        dial.replace(dial.assets[off], rgba, resize=True)
+        dial.move(st, x, y)
+    return bool(slots)
 
 
 # -- background -----------------------------------------------------------------------------------------------------
