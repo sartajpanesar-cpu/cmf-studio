@@ -166,6 +166,7 @@ class WatchLink:
         self.needs_pair_retry_s = needs_pair_retry_s
         self.time_sync_s = time_sync_s
         self.op_timeout_s = 15.0
+        self.connect_timeout_s = 60.0
         self.bt_off_poll_s = 2.0
         self.last_keepalive_at: float | None = None
         self._last_time_sync = 0.0
@@ -249,7 +250,9 @@ class WatchLink:
         while not self._stopping:
             delay = 0.0
             try:
-                await self._connect()
+                # bound the whole connect: a CoreBluetooth call that never answers once wedged watchd in
+                # "connecting" for three days (2026-10-29 → 11-01), missing the DST change
+                await asyncio.wait_for(self._connect(), self.connect_timeout_s)
                 self._attempt = 0
                 await self._hold()
             except (NotPairedError, StaleKeyError) as exc:
