@@ -358,6 +358,17 @@ def cmd_events(c: Client, a: argparse.Namespace) -> None:
         print(f"{ts(ev['ts'])}  {ev['kind']:<7} {json.dumps(ev['data'])}")
 
 
+def cmd_rules(c: Client, a: argparse.Namespace) -> None:
+    res = c.call("POST", "/rules/reload") if a.reload else c.call("GET", "/rules")
+    print(f"rules from {res['path'] if res['from_file'] else 'built-in defaults'}")
+    if res["error"]:
+        print(f"  rules.json is invalid, using defaults: {res['error']}")
+    for i, r in enumerate(res["rules"]):
+        when = r["on"] + "".join(f" {k}={r[k]}" for k in ("button", "kind", "state") if k in r)
+        does = ", ".join(d["action"] + (f" {d['name']!r}" if "name" in d else "") for d in r["do"])
+        print(f"  {i}. on {when} -> {does}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cmf", description="Control the CMF Watch Pro 2 through watchd.")
     p.add_argument("--url", default=os.environ.get("CMF_API", DEFAULT_URL))
@@ -444,6 +455,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--kind", help="e.g. button, state, job")
     s.add_argument("--limit", type=int, default=30)
     s.set_defaults(func=cmd_events)
+
+    s = sub.add_parser("rules", help="show the automation rules (edit rules.json, then --reload)")
+    s.add_argument("--reload", action="store_true", help="re-read rules.json")
+    s.set_defaults(func=cmd_rules)
     return p
 
 

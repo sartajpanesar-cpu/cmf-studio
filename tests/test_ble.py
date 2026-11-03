@@ -147,3 +147,22 @@ async def test_hung_keepalive_is_bounded(paired_link, watch, monkeypatch):
 
     monkeypatch.setattr(watch, "write", never)
     await wait_state(paired_link, LinkState.DISCONNECTED, timeout=2)
+
+
+async def test_hung_connect_is_bounded(paired_link, watch, monkeypatch):
+    # a connect that never returns must time out and retry, not leave the link "connecting" forever
+    paired_link.connect_timeout_s = 0.2
+    real = watch.connect
+
+    async def never():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(watch, "connect", never)
+    watch.drop()
+    for _ in range(40):
+        if "TimeoutError" in (paired_link.last_error or ""):
+            break
+        await asyncio.sleep(0.05)
+    assert "TimeoutError" in (paired_link.last_error or ""), paired_link.last_error
+    monkeypatch.setattr(watch, "connect", real)
+    await wait_state(paired_link, LinkState.CONNECTED, timeout=5)

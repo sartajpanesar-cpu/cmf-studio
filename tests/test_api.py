@@ -154,3 +154,12 @@ async def test_ui_is_served_without_token_and_api_still_needs_it(start_link, tmp
         page = await c.get("/ui/")
         assert page.status_code == 200 and "CMF Studio" in page.text
         assert (await c.get("/status")).status_code == 401
+
+
+async def test_no_unauthenticated_docs_and_research_endpoints_off(api):
+    client = api[0] if isinstance(api, tuple) else api
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert (await client.get(path)).status_code in (401, 404)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    r = await client.post("/settings/raw", json={"name": "dnd", "hex": "01"}, headers=auth)
+    assert r.status_code == 403 and "CMF_RESEARCH" in r.json()["detail"]

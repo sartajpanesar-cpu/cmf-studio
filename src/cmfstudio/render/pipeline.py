@@ -42,7 +42,7 @@ class Rendered:
         }
 
 
-async def render(spec: FaceSpec, ctx: Context | None = None, base_dir: Path | str = ".") -> Rendered:
+async def render(spec: FaceSpec, ctx: Context | None = None, base_dir: Path | str | None = None) -> Rendered:
     ctx = ctx or Context()
     source = await raster.render_png(html.build(spec, ctx, base_dir))
     masked = raster.round_mask(Image.open(io.BytesIO(source)))

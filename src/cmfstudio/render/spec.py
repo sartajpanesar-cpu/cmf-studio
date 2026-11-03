@@ -24,11 +24,31 @@ def _color(v: str) -> str:
 
 Color = Annotated[str, AfterValidator(_color)]
 
+# Font names and data: URIs end up inside HTML attributes and CSS; constrain them instead of trusting escaping.
+FONT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
+DATA_URI = re.compile(r"^data:[\w.+-]+/[\w.+-]+;base64,[A-Za-z0-9+/]*={0,2}$")
+
+
+def _font_name(v: str) -> str:
+    if not FONT_NAME.match(v):
+        raise ValueError(f"font name may use letters, digits, space, '_', '.', '-' only, got {v!r}")
+    return v
+
+
+def _asset(v: str) -> str:
+    if v.startswith("data:") and not DATA_URI.match(v):
+        raise ValueError("data: URIs must be base64 (data:<type>/<subtype>;base64,...)")
+    return v
+
+
+FontName = Annotated[str, AfterValidator(_font_name)]
+Asset = Annotated[str, AfterValidator(_asset)]
+
 
 class FontRef(BaseModel):
-    family: str
+    family: FontName
     source: Literal["google", "local", "system"] = "google"
-    path: str | None = Field(default=None, description="local .ttf/.otf, relative to the spec file")
+    path: Asset | None = Field(default=None, description="local .ttf/.otf, relative to the spec file")
     weights: list[int] = [400, 700]
 
 
@@ -52,7 +72,7 @@ class TextLayer(BaseModel):
     bind: str | None = Field(default=None, description="date:<strftime> | metric:<name> | static:<text> | insight")
     x: int = SIZE // 2
     y: int = SIZE // 2
-    font: str | None = None
+    font: FontName | None = None
     size: int = Field(32, gt=0, le=400)
     weight: int = 400
     color: Color = "#ffffff"
@@ -66,7 +86,7 @@ class TextLayer(BaseModel):
 
 class ImageLayer(BaseModel):
     type: Literal["image"] = "image"
-    src: str = Field(description="path relative to the spec file, or a data: URI")
+    src: Asset = Field(description="path relative to the spec file, or a data: URI")
     x: int = 0
     y: int = 0
     w: int = SIZE
@@ -116,6 +136,22 @@ class RingLayer(BaseModel):
 Layer = Annotated[TextLayer | ImageLayer | CircleLayer | RectLayer | RingLayer, Field(discriminator="type")]
 
 
+class NativeClock(BaseModel):
+    """Instead of a built-in clock style, the watch draws the time in this font (a native face built from one of
+    the template layouts, with the rest of the design as its background; render/native_face.py)."""
+
+    template: Literal[362, 359, 288] = 362
+    font: FontRef | None = None
+    weight: int = Field(600, ge=100, le=900)
+    digit_color: Color | None = "#ffffff"
+    show_date: bool = False
+    show_data: bool = False
+    center_time: bool = True
+    tidy: bool = True
+    offset_x: int = Field(0, ge=-200, le=200)
+    offset_y: int = Field(0, ge=-200, le=200)
+
+
 class FaceSpec(BaseModel):
     version: Literal[0] = 0
     name: str = Field(min_length=1, max_length=60)
@@ -124,3 +160,6 @@ class FaceSpec(BaseModel):
     layers: list[Layer] = []
     clock: Clock = Clock()
     refresh: Literal["on_sync", "manual"] = "on_sync"
+    native_clock: NativeClock | None = Field(None, alias="nativeClock")
+
+    model_config = {"populate_by_name": True}

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from cmfkit.protocol.opcodes import Op
 
-PARSER_VERSION = 1
+PARSER_VERSION = 2  # 2: workouts and GPS routes
 
 ACTIVITY_FETCH_1 = Op(0xFFFF, 0x8005)
 ACTIVITY_FETCH_ACK_1 = Op(0xFFFF, 0x0005)
@@ -29,10 +29,12 @@ WORKOUT_SUMMARY = Op(0x0057, 0x0001)
 WORKOUT_SUMMARY_V3 = Op(0x0160, 0x0001)
 WORKOUT_GPS = Op(0xFFFF, 0xA05A)
 
-# stored raw, not parsed yet (workout layouts are only partly known)
-RAW_ONLY = {WORKOUT_SUMMARY, WORKOUT_SUMMARY_V3, WORKOUT_GPS}
+# stored raw, not parsed yet
+RAW_ONLY: set[Op] = set()
+WORKOUT_OPS = {WORKOUT_SUMMARY, WORKOUT_SUMMARY_V3}
 
 SLEEP_STAGES = {1: "deep", 2: "core", 3: "rem", 4: "awake"}
+DAY_S = 86400
 
 
 class ParseError(ValueError):
@@ -121,6 +123,114 @@ def sleep(payload: bytes) -> SleepSession:
     return SleepSession(start, end, totals, unknown, stages)
 
 
+# -- workouts (layouts from Gadgetbridge's CmfWorkoutSummaryParser; the Pro 2 spec §8.4 describes WORKOUT_SUMMARY
+# v1 differently — start, end, duration first — so v1 records are sanity-checked and the other layout tried) ------
+
+
+@dataclass(frozen=True)
+class Workout:
+    start_ts: int
+    end_ts: int
+    duration_s: int
+    sport: int
+    hr_avg: int | None
+    kcal: int | None
+    steps: int | None = None
+    distance_m: int | None = None
+    pace_avg_s_km: int | None = None
+    has_gps: bool = False
+    layout: str = ""
+    extra: dict = field(default_factory=dict)
+
+
+def _plausible(w: Workout) -> bool:
+    return (
+        1_500_000_000 < w.start_ts <= w.end_ts < w.start_ts + DAY_S
+        and abs((w.end_ts - w.start_ts) - w.duration_s) <= 600
+    )
+
+
+def _v1_gadgetbridge(r: bytes) -> Workout:
+    start, duration, sport, hr, kcal, steps, dist, pace = struct.unpack_from("<IHBBHIIH", r)
+    end, gps = struct.unpack_from("<IB", r, 26)
+    extra = {}
+    if len(r) >= 54:
+        load, aer, anaer, rec, *zones = struct.unpack_from("<4H5H", r, 32)
+        extra = {
+            "training_load": load,
+            "aerobic": aer / 100,
+            "anaerobic": anaer / 100,
+            "recovery_min": rec,
+            "hr_zone_min": list(zones),
+            "score": struct.unpack_from("<I", r, 50)[0],
+        }
+    return Workout(start, end, duration, sport, hr, kcal, steps, dist, pace, gps == 1, "v1-gadgetbridge", extra)
+
+
+def _v1_spec(r: bytes) -> Workout:
+    start, end, duration, sport, hr, kcal = struct.unpack_from("<IIIBBH", r)
+    return Workout(start, end, duration, sport, hr, kcal, layout="v1-spec")
+
+
+def workouts_v1(payload: bytes) -> list[Workout]:
+    """WORKOUT_SUMMARY (0057:0001): 32- or 54-byte records."""
+    size = 54 if len(payload) % 54 == 0 and len(payload) % 32 else 32 if len(payload) % 32 == 0 else 0
+    if not size:
+        raise ParseError(f"workout summary of {len(payload)} bytes isn't a multiple of 32 or 54")
+    out = []
+    for i in range(0, len(payload), size):
+        rec = payload[i : i + size]
+        w = _v1_gadgetbridge(rec)
+        if not _plausible(w):
+            alt = _v1_spec(rec)
+            if not _plausible(alt):
+                raise ParseError(f"workout record {i // size} fits neither known layout: {rec.hex()}")
+            w = alt
+        out.append(w)
+    return out
+
+
+def workout_v3(payload: bytes) -> list[Workout]:
+    """WORKOUT_SUMMARY_V3 (0160:0001): one record; GPS workouts carry a 40-byte block then running metrics."""
+    if len(payload) < 16:
+        raise ParseError(f"v3 workout summary too short ({len(payload)} B)")
+    start, end, duration, sport, hr, kcal = struct.unpack_from("<IIIBBH", payload)
+    w = Workout(start, end, duration, sport, hr, kcal, layout="v3")
+    if len(payload) >= 16 + 40 + 32:
+        steps, dist, _u, pace_max, pace_avg, _u2, cadence, stride = struct.unpack_from("<8I", payload, 56)
+        w = Workout(
+            start,
+            end,
+            duration,
+            sport,
+            hr,
+            kcal,
+            steps,
+            dist,
+            pace_avg,
+            True,
+            "v3",
+            {"pace_max_s_km": pace_max, "cadence_spm": cadence, "stride_cm": stride},
+        )
+    if not _plausible(w):
+        raise ParseError(f"v3 workout summary isn't plausible: {payload[:16].hex()}")
+    return [w]
+
+
+def gps_points(payload: bytes) -> list[tuple[int, float, float]]:
+    """WORKOUT_GPS (FFFF:A05A): 12-byte points, ts · longitude×1e7 · latitude×1e7 (LE, spec §9) → (ts, lat, lon)."""
+    if len(payload) % 12:
+        raise ParseError(f"GPS payload of {len(payload)} bytes isn't a multiple of 12")
+    return [
+        (ts, lat / 1e7, lon / 1e7)
+        for ts, lon, lat in struct.iter_unpack("<iii", payload)
+        if -90 <= lat / 1e7 <= 90 and -180 <= lon / 1e7 <= 180 and (lat or lon)
+    ]
+
+
+WORKOUT_PARSERS = {WORKOUT_SUMMARY: workouts_v1, WORKOUT_SUMMARY_V3: workout_v3}
+
+
 SAMPLE_PARSERS = {
     ACTIVITY_DATA: activity,
     HEART_RATE: heart_rate,
@@ -130,4 +240,4 @@ SAMPLE_PARSERS = {
     STRESS: stress,
 }
 
-DATA_OPS = set(SAMPLE_PARSERS) | {SLEEP_DATA} | RAW_ONLY
+DATA_OPS = set(SAMPLE_PARSERS) | {SLEEP_DATA, WORKOUT_GPS} | WORKOUT_OPS | RAW_ONLY

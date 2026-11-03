@@ -39,6 +39,8 @@ class FetchRun:
     frames: Counter = field(default_factory=Counter)
     new_samples: Counter = field(default_factory=Counter)
     sleep_sessions: int = 0
+    workouts: int = 0
+    gps_points: int = 0
     parse_errors: int = 0
     min_ts: int | None = None
 
@@ -52,6 +54,8 @@ class FetchRun:
             "frames": dict(self.frames),
             "new_samples": dict(self.new_samples),
             "sleep_sessions": self.sleep_sessions,
+            "workouts": self.workouts,
+            "gps_points": self.gps_points,
             "parse_errors": self.parse_errors,
             "seconds": round(time.monotonic() - self.started, 1),
         }
@@ -107,6 +111,18 @@ class SyncManager:
         if not parsed:
             return
         try:
+            if op in p.WORKOUT_PARSERS:
+                for w in p.WORKOUT_PARSERS[op](payload):
+                    self.store.upsert_workout(w, frame_id)
+                    if run:
+                        run.workouts += 1
+                return
+            if op == p.WORKOUT_GPS:
+                points = p.gps_points(payload)
+                self.store.add_gps_points(points)
+                if run:
+                    run.gps_points += len(points)
+                return
             if op == p.SLEEP_DATA:
                 session = p.sleep(payload)
                 self.store.upsert_sleep(session, frame_id)

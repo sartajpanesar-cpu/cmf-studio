@@ -70,19 +70,59 @@ Watch. Notes: weekly Claude recap built and tested with a fake client but not ru
 - [ ] Widgets editor (port Gadgetbridge widget setup) (**deferred** by owner 2026-10-26: Gadgetbridge has no CMF widget code to port; only the QUICK_CARD opcode FFFF 906D/A06D is known. Revisit with new evidence)
 
 ## Backlog (owner priorities)
-1. **Custom time font** (owner: "I really want to change the time font"). Photo dials can't: the clock is one of 5
-   firmware styles (findings 2026-10-26). Path: structured dials — re-skin a store dial's digit sprite atlas
-   (`img_number`, spec §11.6/§11.10) with digits rendered in any font; live time, up to 7 slots. Needs a container
-   editor (two header CRC32s, never grow the file, fresh install) and store dial binaries (spec repo
-   `wfweb/public/templates` has 5). Firmware font replacement is Tier 3 — not this.
+1. ~~Custom time font~~ → Phase 5b (native faces).
 2. Widgets / quick-card editor (deferred: no Gadgetbridge code; only opcode FFFF 906D known).
 3. Measure on-watch buffer length (Phase 2 deferred).
+4. Moving graphics on native faces (owner, 2026-10-27: later). No autoplay — stock animations are firmware
+   `res_e.bin` `.ajs` (Tier 3). In-scope options from the spec's editor (unverified on device): re-skin a
+   seconds/minute hand (spin, orbit, walk), value-driven frame sheets (1 fps flipbook by seconds, hourly scenes),
+   progress rings. First step: find a template with a seconds hand or frame sheet; sim, then one test install.
+5. Phase 5 close-out checks (owner, on the watch): REST vs resting HR (data id 0x60); record a workout; watch
+   watchd.log for "MTU stuck" to confirm the long-write fallback.
 
 ## Phase 5 — MCP + automations · ~1 weekend
-- [ ] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code
-- [ ] Rules engine: on-sync → re-render face; job-done → notify; button → action
-- [ ] Claude Code hooks → watch alerts (oh-my-wrist pattern)
-- [ ] Threat model + least-privilege write-up (portfolio artifact)
+- [x] MCP server with the tool surface in `02-architecture.md`; registered in Claude Code (`.mcp.json` → `cmf-mcp`;
+  verified over stdio against the real watchd 2026-10-26). The VS Code extension never shows the project-server
+  approval prompt, so on this Mac it's also registered at local scope (`claude mcp add -s local`, 2026-10-27)
+- [x] Rules engine: on-sync → re-render face; job-done → notify; button → action (`core/rules.py`, owner-edited
+  `rules.json` in watchd's app dir, example `docs/rules.example.json`, `cmf rules [--reload]`). Closed action set:
+  notify (with today's stats), sync, refresh_face, run a macOS Shortcut by name. Verified on the real watch 2026-10-26:
+  reload → set_music, play_pause → stats notification (acked), next → sync → refresh rule
+- [x] Claude Code hooks → watch alerts (oh-my-wrist pattern): `cmf-hook` in `.claude/settings.json`. Turns of
+  ≥ 60 s (`CMF_HOOK_MIN_S`) and permission/idle prompts alert the wrist; 5 min TTL, never blocks Claude.
+  Pipe-tested against the real watch 2026-10-26 (job acked)
+- [x] Threat model + least-privilege write-up (portfolio artifact): `docs/07-threat-model.md`. Writing it found and
+  fixed two renderer issues (font-name markup injection, unrestricted local file reads) plus JS-off, fonts-only egress
+
+## Phase 5b — Watch features, no firmware risk (owner-directed 2026-10-26)
+Owner: "go in that order and keep going through all features, test and implement into the web controller". Every
+item: sim/fixture tests first, then the web UI, then a check on the watch. Nothing here writes firmware (Tier 3).
+- [x] **Native faces — your font for the firmware-drawn time.** Structured dials built from the spec's digital
+  templates (362 Steady, 359 Ring Data, 288 Type): every digit set re-drawn in any Google/local font, digit colour,
+  background colour/gradient/picture; asset pool rebuilt with every ref tail re-pointed (`render/native*.py`).
+  Installs over a stock face's slot (9075 replace). Installed on the watch 2026-10-26 over SlopeTime (finish 01,
+  activated); renders correctly (owner, 2026-10-26)
+- [x] Native faces take any background: colour, gradient, Studio design or a photo, on every layout (background node
+  inserted where a layout has none). Verified on the watch 2026-10-26: Studio design behind Type, a photo behind Ring
+  Data; chosen digit colour beats the watch's accent tint. Installs add a face (no in-place update; remove on the
+  watch first)
+- [x] Merge Studio and Native into one editor: Studio's Clock is "Built-in style" or "Your font" (layout, font gallery,
+  colour, date/data/centre). Your-font designs preview live with the watch-drawn clock overlaid, render exactly, and
+  install as a native face with the design as background (add-only; the editor says when a layout is already on the
+  watch or it's full). The separate Native tab is gone
+- [x] Weather push (+ the city line as a glance: place, text, or a Shortcut's output e.g. next calendar event).
+  Open-Meteo, every 30 min while enabled. Displayed on the watch (owner check 2026-10-26)
+- [x] Settings through watchd / UI / MCP. Probed the watch's own values first; every write verified by read-back.
+  On-device: alarms (BE in / LE out, sorted), DND, reminders, sports menu (read) work; goals acked but unverifiable;
+  monitoring / HR alerts / units write-only (sim). MCP: get_watch_settings, set_alarm, remove_alarm, set_goals,
+  set_do_not_disturb, find_watch. Not done: world clock (city-id table unknown), quick replies (no use with an iPhone)
+- [x] Workouts + GPS routes decoded from sync (Gadgetbridge layouts, v1 sanity-checked against the spec's layout),
+  Health-tab list + route drawing. Pending: owner records a workout (ideally outdoor GPS) to verify on real data
+- [x] Find my watch (acked on device); find phone → Mac plays a sound (sim)
+- [x] Mac now-playing ↔ watch music card and buttons (Spotify / Music over AppleScript, only if running; sim-tested
+  with a fake osascript; off by default — owner to try)
+- [x] (careful) home tiles: **read-only** (on device: 4 screens) — reordering stays out until the SET framing is known;
+  contacts as an info panel (backed up first, verified by read-back, cleared with a blank record — on device)
 
 ## Phase 6 — Firmware research (read-only, optional) · open-ended
 - [ ] Obtain stock OTA for the current firmware version

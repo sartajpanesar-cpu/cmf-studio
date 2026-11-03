@@ -2,10 +2,11 @@
   import { onDestroy } from "svelte";
   import { get, hasToken } from "./lib/api";
   import Health from "./views/Health.svelte";
+  import Settings from "./views/Settings.svelte";
   import Studio from "./views/Studio.svelte";
   import Watch from "./views/Watch.svelte";
 
-  const tabs = ["Health", "Studio", "Watch"] as const;
+  const tabs = ["Health", "Studio", "Settings", "Watch"] as const;
   type Tab = (typeof tabs)[number];
   let tab = $state<Tab>(readTab());
   let status = $state<any>(null);
@@ -65,7 +66,7 @@
     </div>
   </header>
   <main>
-    {#if tab === "Health"}<Health />{:else if tab === "Studio"}<Studio {status} />{:else}<Watch {status} onchange={refresh} />{/if}
+    {#if tab === "Health"}<Health />{:else if tab === "Studio"}<Studio {status} />{:else if tab === "Settings"}<Settings />{:else}<Watch {status} onchange={refresh} />{/if}
   </main>
 {/if}
 

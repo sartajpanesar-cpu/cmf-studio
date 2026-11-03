@@ -18,16 +18,33 @@ from .spec import SIZE, Clock
 BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]], dtype=np.float32) / 16.0
 
 
-async def render_png(page_html: str, timeout_ms: int = 15_000) -> bytes:
+async def render_png(
+    page_html: str, timeout_ms: int = 15_000, size: tuple[int, int] = (SIZE, SIZE), transparent: bool = False
+) -> bytes:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
-            page = await browser.new_page(viewport={"width": SIZE, "height": SIZE}, device_scale_factor=1)
+            # specs come from the API and MCP: no scripts, and the only network access is Google Fonts
+            page = await browser.new_page(
+                viewport={"width": size[0], "height": size[1]}, device_scale_factor=1, java_script_enabled=False
+            )
+            await page.route("**/*", _only_fonts)
             await page.set_content(page_html, wait_until="networkidle", timeout=timeout_ms)
             await page.evaluate("document.fonts.ready")
-            return await page.screenshot(type="png", omit_background=False)
+            return await page.screenshot(type="png", omit_background=transparent)
         finally:
             await browser.close()
+
+
+FONT_HOSTS = ("https://fonts.googleapis.com/", "https://fonts.gstatic.com/")
+
+
+async def _only_fonts(route) -> None:
+    url = route.request.url
+    if url.startswith(FONT_HOSTS) or url.startswith("data:"):
+        await route.continue_()
+    else:
+        await route.abort()
 
 
 def _circle_mask(size: int = SIZE) -> Image.Image:

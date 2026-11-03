@@ -20,13 +20,28 @@ DEFAULT_FONTS = "-apple-system,'Helvetica Neue',sans-serif"  # page default; als
 MIME_FORMATS = {"font/ttf": "truetype", "font/otf": "opentype", "font/woff": "woff", "font/woff2": "woff2"}
 
 
+ASSET_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ttf", ".otf", ".woff", ".woff2"}
+
+
 def data_uri(path: Path) -> str:
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
-def _src(src: str, base: Path) -> str:
-    return src if src.startswith("data:") else data_uri((base / src).resolve())
+def local_asset(src: str, base: Path | None) -> str:
+    """A spec's local image/font path as a data: URI. Only under ``base`` (the spec file's folder, given by the CLI)
+    and only image/font files: specs also come from the API and MCP, and must not read arbitrary files."""
+    if base is None:
+        raise ValueError(f"local file {src!r}: only data: URIs are accepted here (the CLI inlines files)")
+    root = base.resolve()
+    path = (root / src).resolve()
+    if not path.is_relative_to(root) or path.suffix.lower() not in ASSET_SUFFIXES:
+        raise ValueError(f"local file {src!r} must be an image or font inside {root}")
+    return data_uri(path)
+
+
+def _src(src: str, base: Path | None) -> str:
+    return src if src.startswith("data:") else local_asset(src, base)
 
 
 def inline_assets(spec: FaceSpec, base_dir: Path | str) -> FaceSpec:
@@ -34,24 +49,25 @@ def inline_assets(spec: FaceSpec, base_dir: Path | str) -> FaceSpec:
     base = Path(base_dir)
     data = spec.model_dump(by_alias=True)
     for layer in data["layers"]:
-        if layer["type"] == "image" and not layer["src"].startswith("data:"):
-            layer["src"] = data_uri((base / layer["src"]).resolve())
+        if layer["type"] == "image":
+            layer["src"] = _src(layer["src"], base)
     for font in data["fonts"]:
-        if font["source"] == "local" and font["path"] and not font["path"].startswith("data:"):
-            font["path"] = data_uri((base / font["path"]).resolve())
+        if font["source"] == "local" and font["path"]:
+            font["path"] = _src(font["path"], base)
     return FaceSpec.model_validate(data)
 
 
-def _font_css(spec: FaceSpec, base: Path) -> tuple[str, str]:
+def _font_css(spec: FaceSpec, base: Path | None) -> tuple[str, str]:
     links, faces = [], []
     for f in spec.fonts:
         if f.source == "google":
-            weights = ";".join(str(w) for w in sorted(set(f.weights)))
+            # One request per weight, plus the family's default style: Google rejects a whole request that names a
+            # weight the font doesn't have (Orbitron has no 300), and the page then fell back to the system font.
+            # With separate links the browser uses the closest weight that did load.
             family = f.family.replace(" ", "+")
-            links.append(
-                f'<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family={family}:wght@{weights}'
-                '&display=block">'
-            )
+            base = f"https://fonts.googleapis.com/css2?family={family}"
+            for href in [base] + [f"{base}:wght@{w}" for w in sorted(set(f.weights))]:
+                links.append(f'<link rel="stylesheet" href="{href}&display=block">')
         elif f.source == "local":
             if not f.path:
                 raise ValueError(f"local font {f.family!r} needs a path")
@@ -59,8 +75,7 @@ def _font_css(spec: FaceSpec, base: Path) -> tuple[str, str]:
                 mime = f.path[5:].split(";", 1)[0]
                 uri, fmt = f.path, MIME_FORMATS.get(mime, "truetype")
             else:
-                path = (base / f.path).resolve()
-                uri, fmt = data_uri(path), FONT_FORMATS.get(path.suffix.lower(), "truetype")
+                uri, fmt = local_asset(f.path, base), FONT_FORMATS.get(Path(f.path).suffix.lower(), "truetype")
             faces.append(f"@font-face{{font-family:'{f.family}';src:url({uri}) format('{fmt}');}}")
     return "\n".join(links), "\n".join(faces)
 
@@ -134,8 +149,9 @@ def _ring(layer: RingLayer, ctx: Context) -> str:
     return _svg("".join(parts))
 
 
-def build(spec: FaceSpec, ctx: Context, base_dir: Path | str = ".") -> str:
-    base = Path(base_dir)
+def build(spec: FaceSpec, ctx: Context, base_dir: Path | str | None = None) -> str:
+    """``base_dir``: where relative asset paths may be read from; None (API/MCP) accepts data: URIs only."""
+    base = Path(base_dir) if base_dir is not None else None
     links, faces = _font_css(spec, base)
     body: list[str] = []
     for index, layer in enumerate(spec.layers):
